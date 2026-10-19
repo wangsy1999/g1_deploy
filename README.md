@@ -224,9 +224,9 @@ Select即使启动时按住也停止，且优先于其他按钮。B和Y不映射
 LowState超时、无效轴或软件故障会停止，但LowState持续更新不等于遥控无线链路有心跳；
 当前无法保证识别固件重复旧遥控值时的无线失联。
 
-## Logitech F710
+## Logitech F710 (仿真时可用）
 
-接收器插在运行程序的机载开发计算机上。切到XInput，MODE灯熄灭，
+接收器插在运行程序的计算机上。切到XInput，MODE灯熄灭，
 避免左杆与十字键互换，见 [Logitech手册](https://www.logitech.com/assets/34885/3/f710620-002923003403gswamr.pdf)。
 先检查输入，再连接控制：
 
