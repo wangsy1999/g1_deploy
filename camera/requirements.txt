@@ -1,0 +1,4 @@
+numpy>=1.21,<3
+opencv-python-headless>=4.5,<5
+# Install the RealSense SDK/Python binding matching the target JetPack/Python ABI.
+pyrealsense2>=2.55,<3

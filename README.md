@@ -1,5 +1,9 @@
 # g1_deploy — G1 DreamWaQ 机载部署
 
+新增独立的 **RealSense RGB/深度网页测试**与 **Parkour 双网络推理**（MuJoCo 相机 / 实机 RealSense 切换）。
+入口为 `scripts/realsense.sh`、`scripts/parkour.sh`，安装后也可用 `./g1 realsense`、`./g1 parkour`。
+完整接线、依赖、启动、空跑和标定要求见 [Parkour 与 RealSense 说明](docs/PARKOUR.md)。原 DreamWaQ 程序独立保留。
+
 独立的G1 29DOF DreamWaQ C++推理项目，纯粹的vibe coding by codex。直接读取Unitree DDS低层状态并下发PR关节目标。
 包含模型、部署配置、原配遥控器/F710输入、离线检查、网页监控和机载安装入口。
 C++控制程序不依赖MuJoCo、ROS或Python；可选网页监控需要Python与官方SDK2 Python依赖，源码已包含在本仓库。

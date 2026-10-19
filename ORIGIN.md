@@ -1,5 +1,13 @@
 # Source provenance
 
+Parkour inference is additionally adapted from the local checkout of
+`https://github.com/wangsy1999/unitree_mujoco`: `example/cpp/g1_parkour_policy.h`,
+`example/parkour/g1.json`, and `exported/g1_parkour/`, at commit
+`7c6642f89e25f72dd7de3cf7683f166bce943fef`.
+The original BSD project license is retained. Network/config details and SHA256
+values are recorded in [docs/PARKOUR.md](docs/PARKOUR.md).
+No MuJoCo simulator, XML or mesh assets are copied into this repository.
+
 Extracted from the working tree of `wangsy1999/unitree_mujoco`, based on commit `7c6642f89e25f72dd7de3cf7683f166bce943fef`.
 The source includes subsequent local DreamWaQ hardware deployment changes.
 This is an independent source tree; no submodule, symlink or parent repository is required.

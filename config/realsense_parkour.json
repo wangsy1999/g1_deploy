@@ -1,0 +1,10 @@
+{
+  "description": "Training camera geometry; verify the actual mount before hardware output.",
+  "width": 64,
+  "height": 36,
+  "horizontal_fov_deg": 89.51,
+  "vertical_fov_deg": 58.29,
+  "position_in_torso_m": [0.0487988662332928, 0.01, 0.4378029937970051],
+  "orientation_wxyz_in_torso_forward_left_up": [0.9135367613482678, 0.004363309284746571, 0.4067366430758002, 0.0],
+  "max_depth_m": 2.5
+}

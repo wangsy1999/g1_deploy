@@ -37,28 +37,50 @@ target_link_libraries(g1_dwaq PRIVATE unitree_sdk2 Boost::boost yaml-cpp "${ORT_
 target_compile_definitions(g1_dwaq PRIVATE G1_WITH_POLICY
     G1_POLICY_DEFAULT_CONFIG="${REPOSITORY_ROOT}/config/g1_locomotion.yaml"
     G1_POLICY_DEFAULT_MODEL="${REPOSITORY_ROOT}/models/policy.onnx")
+add_executable(g1_parkour "${REPOSITORY_ROOT}/src/parkour.cpp")
+target_include_directories(g1_parkour PRIVATE "${CONTROL_SOURCE}" "${ORT_INCLUDE}")
+target_link_libraries(g1_parkour PRIVATE unitree_sdk2 Boost::boost yaml-cpp "${ORT_LIBRARY}")
+target_compile_definitions(g1_parkour PRIVATE
+    G1_PARKOUR_DEFAULT_MODELS="${REPOSITORY_ROOT}/models/parkour"
+    G1_PARKOUR_DEFAULT_CONFIG="${REPOSITORY_ROOT}/config/g1_parkour.json"
+    G1_POLICY_DEFAULT_CONFIG="${REPOSITORY_ROOT}/config/g1_locomotion.yaml")
 # Launcher passes package-local resources. Keep ORT local after installation.
 set_target_properties(g1_dwaq PROPERTIES INSTALL_RPATH "$ORIGIN/../lib;${SDK_RUNTIME_DIR}")
+set_target_properties(g1_parkour PROPERTIES INSTALL_RPATH "$ORIGIN/../lib;${SDK_RUNTIME_DIR}")
 if(UNIX AND NOT APPLE)
     target_link_options(g1_dwaq PRIVATE "-Wl,--disable-new-dtags")
+    target_link_options(g1_parkour PRIVATE "-Wl,--disable-new-dtags")
 endif()
 
 include(CTest)
 if(BUILD_TESTING)
-    foreach(test IN ITEMS g1_hardware g1_gamepad g1_unitree_remote g1_locomotion_policy)
+    foreach(test IN ITEMS g1_hardware g1_gamepad g1_unitree_remote g1_locomotion_policy g1_parkour_policy g1_parkour_input)
         add_executable(${test}_test "${REPOSITORY_ROOT}/tests/${test}_test.cpp")
         target_include_directories(${test}_test PRIVATE "${CONTROL_SOURCE}" "${ORT_INCLUDE}")
     endforeach()
     target_link_libraries(g1_hardware_test PRIVATE unitree_sdk2 yaml-cpp)
     target_link_libraries(g1_locomotion_policy_test PRIVATE yaml-cpp "${ORT_LIBRARY}")
+    target_link_libraries(g1_parkour_policy_test PRIVATE yaml-cpp "${ORT_LIBRARY}")
+    target_link_libraries(g1_parkour_input_test PRIVATE unitree_sdk2 yaml-cpp "${ORT_LIBRARY}")
     add_test(NAME g1_hardware COMMAND g1_hardware_test "${REPOSITORY_ROOT}/config/g1_locomotion.yaml")
     add_test(NAME g1_gamepad COMMAND g1_gamepad_test)
     add_test(NAME g1_unitree_remote COMMAND g1_unitree_remote_test)
     add_test(NAME g1_locomotion_policy COMMAND g1_locomotion_policy_test
         "${REPOSITORY_ROOT}/models/policy.onnx" "${REPOSITORY_ROOT}/config/g1_locomotion.yaml")
+    add_test(NAME g1_parkour_policy COMMAND g1_parkour_policy_test
+        "${REPOSITORY_ROOT}/models/parkour" "${REPOSITORY_ROOT}/config/g1_parkour.json")
+    add_test(NAME g1_parkour_input COMMAND g1_parkour_input_test
+        "${REPOSITORY_ROOT}/models/parkour" "${REPOSITORY_ROOT}/config/g1_parkour.json")
 endif()
 
-install(TARGETS g1_dwaq RUNTIME DESTINATION bin)
+install(TARGETS g1_dwaq g1_parkour RUNTIME DESTINATION bin)
+install(DIRECTORY "${REPOSITORY_ROOT}/models/parkour" DESTINATION models)
+install(FILES "${REPOSITORY_ROOT}/config/g1_parkour.json" "${REPOSITORY_ROOT}/config/realsense_parkour.json" DESTINATION config)
+install(FILES "${REPOSITORY_ROOT}/camera/realsense_web.py" "${REPOSITORY_ROOT}/camera/requirements.txt" DESTINATION camera)
+install(FILES "${REPOSITORY_ROOT}/camera/static/realsense.html" DESTINATION camera/static)
+install(PROGRAMS "${REPOSITORY_ROOT}/scripts/realsense.sh" DESTINATION . RENAME realsense)
+install(PROGRAMS "${REPOSITORY_ROOT}/scripts/parkour.sh" DESTINATION . RENAME parkour)
+install(FILES "${REPOSITORY_ROOT}/docs/PARKOUR.md" DESTINATION docs)
 install(FILES "${REPOSITORY_ROOT}/models/policy.onnx" DESTINATION models)
 install(FILES "${REPOSITORY_ROOT}/config/g1_locomotion.yaml" DESTINATION config)
 # Preserve SONAME symlinks and their targets from the selected native ORT release.

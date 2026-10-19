@@ -11,6 +11,8 @@ Usage:
   ./g1 check                         Offline ONNX inference, no DDS
   ./g1 interfaces                    Show local network interfaces and route to control PC
   ./g1 monitor INTERFACE [HOST] [PORT] Start the read-only web monitor (Python dependencies needed)
+  ./g1 realsense [options]           Read-only RGB/depth web test, optional local depth feed
+  ./g1 parkour check|sim|real ...     Dual-network parkour inference (separate executable)
   ./g1 joystick [DEVICE]             Read-only F710 input check, no DDS
   ./g1 read-only ROBOT_INTERFACE      Subscribe to hardware state, no commands or mode release
   ./g1 run ROBOT_INTERFACE [DEVICE]   Hardware control, optional F710 jsdev path
@@ -35,6 +37,9 @@ fi
 export LD_LIBRARY_PATH="$package_dir/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 if [[ "$mode" == monitor ]]; then
     exec "$package_dir/monitor" "$@"
+fi
+if [[ "$mode" == realsense || "$mode" == parkour ]]; then
+    exec "$package_dir/$mode" "$@"
 fi
 [[ -x "$controller" ]] || { echo "Missing executable: $controller" >&2; exit 1; }
 case "$mode" in

@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>G1 · RealSense 相机测试</title>
+<style>body{margin:0;background:#101820;color:#e8eef2;font:16px system-ui;padding:24px}h1{font-size:24px}main{display:flex;flex-wrap:wrap;gap:20px}figure{margin:0;flex:1;min-width:280px}img{width:100%;background:#182632;border-radius:12px}figcaption{margin:10px 0;color:#a8bccb}pre{white-space:pre-wrap;background:#182632;padding:18px;border-radius:12px}#state{color:#69d6ba}.error{color:#ffad8f!important}</style>
+<h1>RealSense 相机测试</h1><p>只读视频预览 · RGB 与深度各自显示，未做彩色对齐 · 无机器人控制功能</p>
+<p id="state">等待相机数据…</p>
+<main><figure><figcaption>RGB</figcaption><img src="/color.mjpg" alt="RGB实时视频"></figure><figure><figcaption>深度伪彩色 · 0–2.5 m（黑色为无效值）</figcaption><img src="/depth.mjpg" alt="深度实时视频"></figure></main>
+<pre id="details"></pre>
+<script>const state=document.getElementById('state'),details=document.getElementById('details');async function refresh(){try{let s=await(await fetch('/api/status',{cache:'no-store'})).json();let ok=s.ready&&s.age_ms<1500;state.textContent=s.error?'相机错误：'+s.error:ok?`在线 · ${s.source} · ${s.name||''} · 序列号 ${s.serial} · 图像年龄 ${s.age_ms} ms`:'相机尚未就绪或数据已过期';state.className=ok?'':'error';details.textContent=JSON.stringify(s,null,2)}catch(e){state.textContent='网页服务连接失败';state.className='error'}}setInterval(refresh,1000);refresh();</script></html>

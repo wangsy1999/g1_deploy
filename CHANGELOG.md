@@ -1,5 +1,12 @@
 # 改动总结
 
+## 2026-10-19：RealSense 网页测试与独立 Parkour 推理
+
+- 新增 `camera/realsense_web.py` 和网页：PC2 采集 RealSense RGB/米制深度，外部设备通过 MJPEG 查看画面和相机状态；独立运行不发送机器人命令。
+- 新增 `g1_parkour` 双 ONNX 程序和源仓库配套模型/配置。仿真读取外部 `unitree_mujoco` 相机同步观测，实机读取 RealSense 深度、本体 DDS 和 torso secondary IMU。
+- 新程序保留默认空跑、Start/9 显式接管、接管清空预览、硬件限制和停止阻尼；原配遥控器沿用 Start/X/A/Select。硬件限制沿用最新远程接口，不恢复估算 PD 力矩或实测关节越界停止。
+- 新增相机协议、网页、模型历史/推理、torso 坐标及外部 MuJoCo 联调测试；使用方法和验证边界见 `docs/PARKOUR.md`。未使用 Isaac Sim，未进行机器人或 USB 相机现场验收。
+
 ## 2026-10-19：移除估算PD力矩与实测关节越界拦截
 
 按操作者要求，不再计算`Kp*(q_target-q)-Kd*dq+tau`或据此触发停止，移除`joint_effort`配置。
