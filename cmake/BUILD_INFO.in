@@ -1,0 +1,6 @@
+policy=DreamWaQ
+robot=G1_29DOF_PR
+system=@CMAKE_SYSTEM_NAME@
+architecture=@CMAKE_SYSTEM_PROCESSOR@
+compiler=@CMAKE_CXX_COMPILER_ID@ @CMAKE_CXX_COMPILER_VERSION@
+build_type=@CMAKE_BUILD_TYPE@
