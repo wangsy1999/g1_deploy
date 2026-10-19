@@ -1,6 +1,6 @@
 # g1_deploy — G1 DreamWaQ 机载部署
 
-独立的G1 29DOF DreamWaQ C++推理项目，直接读取Unitree DDS低层状态并下发PR关节目标。
+独立的G1 29DOF DreamWaQ C++推理项目，纯粹的vibe coding by codex。直接读取Unitree DDS低层状态并下发PR关节目标。
 包含模型、部署配置、原配遥控器/F710输入、离线检查、网页监控和机载安装入口。
 C++控制程序不依赖MuJoCo、ROS或Python；可选网页监控需要Python与官方SDK2 Python依赖，源码已包含在本仓库。
 
