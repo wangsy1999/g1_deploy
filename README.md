@@ -1,4 +1,4 @@
-# G1 DreamWaQ 机载部署
+# g1_deploy — G1 DreamWaQ 机载部署
 
 独立的G1 29DOF DreamWaQ C++推理项目，直接读取Unitree DDS低层状态并下发PR关节目标。
 包含模型、部署配置、F710输入、离线检查和机载安装入口，不依赖MuJoCo、ROS、Python运行时或其他源码仓库。
