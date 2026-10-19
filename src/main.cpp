@@ -409,7 +409,7 @@ public:
             }
             if (hardware_ && output_enabled) {
                 if (!Snapshot(state)) throw std::runtime_error("Hardware state invalid before command publication: " + StateError());
-                hardware_->LimitCommand(command, state, previous_target, 0.002);
+                hardware_->LimitCommand(command, previous_target, 0.002);
             }
             command.crc() = CommandCrc(command);
             // Preview has a separate telemetry topic; it is never sent to actuators.

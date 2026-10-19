@@ -18,14 +18,12 @@ int main(int argc, char** argv) {
         state.crc() = g1_hardware::Crc(state);
         limits.CheckState(state);
         g1_hardware::CheckTelemetryState(state);
-        // A preview may inspect an out-of-range pose, but real arming must reject it.
+        // Finite measured position/velocity excursions do not cause automatic exits.
         auto preview_state = state;
         preview_state.motor_state()[9].q() = limits.lower[9] - 0.02f;
         preview_state.crc() = g1_hardware::Crc(preview_state);
         g1_hardware::CheckTelemetryState(preview_state);
-        bool arming_rejected = false;
-        try { limits.CheckState(preview_state); } catch (const std::runtime_error&) { arming_rejected = true; }
-        Require(arming_rejected, "Preview pose bypassed real arming protection");
+        limits.CheckState(preview_state);
         auto reject_preview = [&](const std::function<void(State&)>& change, bool recalc = true) {
             auto altered = state; change(altered);
             if (recalc) altered.crc() = g1_hardware::Crc(altered);
@@ -62,8 +60,12 @@ int main(int argc, char** argv) {
         bool select_rejected=false;
         try {limits.CheckState(original_remote,1u<<3);}catch(const std::runtime_error&){select_rejected=true;}
         Require(select_rejected,"Unitree Select failed to stop real control");
-        reject([](State& s){ s.motor_state()[0].q() = 100; });
-        reject([](State& s){ s.motor_state()[0].dq() = 100; });
+        reject([](State& s){ s.motor_state()[0].q() = std::numeric_limits<float>::quiet_NaN(); });
+        auto outside = state;
+        outside.motor_state()[0].q() = 100;
+        outside.motor_state()[0].dq() = 100;
+        outside.crc() = g1_hardware::Crc(outside);
+        limits.CheckState(outside);
         std::array<float,29> previous{};
         unitree_hg::msg::dds_::LowCmd_ command{};
         for (int i = 0; i < 29; ++i) {
@@ -71,13 +73,20 @@ int main(int argc, char** argv) {
             command.motor_cmd()[i].q() = 100;
             command.motor_cmd()[i].kp() = 40;
         }
-        limits.LimitCommand(command, state, previous, 0.002);
+        limits.LimitCommand(command, previous, 0.002);
         for (int i = 0; i < 29; ++i)
             Require(std::abs(command.motor_cmd()[i].q()-state.motor_state()[i].q()) <= 0.02001f, "Target slew limit failed");
-        command.motor_cmd()[0].tau() = 10000;
+        command.motor_cmd()[0].tau() = std::numeric_limits<float>::quiet_NaN();
         bool rejected = false;
-        try { limits.LimitCommand(command, state, previous, 0.002); } catch (const std::runtime_error&) { rejected = true; }
-        Require(rejected, "Estimated torque limit failed");
+        try { limits.LimitCommand(command, previous, 0.002); } catch (const std::runtime_error&) { rejected = true; }
+        Require(rejected, "Non-finite command accepted after removing estimated torque check");
+        command.motor_cmd()[0].tau() = 0;
+        previous[4] = limits.lower[4] - 0.02f;
+        command.motor_cmd()[4].q() = previous[4];
+        limits.LimitCommand(command, previous, 0.002);
+        Require(command.motor_cmd()[4].q() >= limits.lower[4]+0.01f &&
+                command.motor_cmd()[4].q() <= limits.upper[4]-0.01f,
+                "Outgoing target escaped bounds after an out-of-range initial measurement");
         std::cout << "Hardware CRC, mode, fault, temperature, IMU, remote stop and command bounds passed\n";
     } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

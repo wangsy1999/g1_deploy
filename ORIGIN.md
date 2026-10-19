@@ -18,4 +18,7 @@ Model: `models/policy.onnx`
 SHA256: `4f23975849ef66d73a170ee3435a274a4c42dd31830f8b07161add84846a871d`
 
 Configuration: `config/g1_locomotion.yaml`
-SHA256: `09f7c133dc5e043aed7572d545e51f12dadf59cd11bcafa338e452c890db0c59`
+Original SHA256: `09f7c133dc5e043aed7572d545e51f12dadf59cd11bcafa338e452c890db0c59`
+Current SHA256: `98841ae0ffb5ae209a0b9fbb70119025b598a828d08e163130d87c277cd29c48`
+The current configuration removes the unused `hardware.joint_effort` field after
+removing the software estimated-PD-torque stop; policy parameters are unchanged.

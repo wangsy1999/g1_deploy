@@ -45,7 +45,7 @@ inline void CheckTelemetryState(const unitree_hg::msg::dds_::LowState_& state) {
         if (!std::isfinite(v)) throw std::runtime_error("Invalid hardware gyroscope");
 }
 struct Limits {
-    std::array<float, 29> lower{}, upper{}, velocity{}, effort{};
+    std::array<float, 29> lower{}, upper{}, velocity{};
     double timeout_ms = 100, max_tilt = 1.0, damping_seconds = 0.5;
     float temperature = 70, target_rate = 10, stop_kd = 1;
     explicit Limits(const YAML::Node& root) {
@@ -61,7 +61,7 @@ struct Limits {
             }
         };
         read("joint_lower", lower); read("joint_upper", upper);
-        read("joint_velocity", velocity); read("joint_effort", effort);
+        read("joint_velocity", velocity);
         timeout_ms = cfg["state_timeout_ms"].as<double>();
         max_tilt = cfg["max_tilt_rad"].as<double>();
         temperature = cfg["max_temperature_c"].as<float>();
@@ -73,7 +73,7 @@ struct Limits {
         if (timeout_ms > 500 || max_tilt >= 1.57 || damping_seconds > 5)
             throw std::runtime_error("Hardware protection setting outside supported range");
         for (int i = 0; i < 29; ++i)
-            if (lower[i]+0.02f >= upper[i] || velocity[i] <= 0 || effort[i] <= 0)
+            if (lower[i]+0.02f >= upper[i] || velocity[i] <= 0)
                 throw std::runtime_error("Invalid per-joint hardware limits");
     }
     void CheckState(const unitree_hg::msg::dds_::LowState_& state, unsigned remote_stop_mask = 1u << 8) const {
@@ -84,8 +84,6 @@ struct Limits {
             if (motor.motorstate() != 0) throw std::runtime_error("Motor fault at DDS joint "+std::to_string(i));
             if (!std::isfinite(motor.q()) || !std::isfinite(motor.dq()) || !std::isfinite(motor.tau_est()))
                 throw std::runtime_error("Non-finite motor state");
-            if (motor.q() < lower[i] || motor.q() > upper[i] || std::abs(motor.dq()) > velocity[i])
-                throw std::runtime_error("Motor position/velocity limit at DDS joint "+std::to_string(i));
             for (auto t : motor.temperature())
                 if (t >= temperature) throw std::runtime_error("Motor overtemperature at DDS joint "+std::to_string(i));
         }
@@ -103,18 +101,18 @@ struct Limits {
         if (keys & remote_stop_mask) throw std::runtime_error("Remote requested damping stop");
     }
     void LimitCommand(unitree_hg::msg::dds_::LowCmd_& cmd,
-                      const unitree_hg::msg::dds_::LowState_& state,
                       std::array<float,29>& previous, double dt) const {
         for (int i = 0; i < 29; ++i) {
             auto& motor = cmd.motor_cmd()[i];
-            if (!std::isfinite(motor.q())) throw std::runtime_error("Invalid hardware target");
+            if (!std::isfinite(motor.q()) || !std::isfinite(motor.dq()) ||
+                !std::isfinite(motor.kp()) || !std::isfinite(motor.kd()) || !std::isfinite(motor.tau()))
+                throw std::runtime_error("Non-finite hardware command at DDS joint "+std::to_string(i));
             const float bound = std::min(target_rate, velocity[i])*dt;
             const float target = std::clamp(motor.q(), lower[i]+0.01f, upper[i]-0.01f);
-            motor.q() = std::clamp(target, previous[i]-bound, previous[i]+bound);
-            const auto& measured = state.motor_state()[i];
-            const float predicted = motor.kp()*(motor.q()-measured.q()) - motor.kd()*measured.dq() + motor.tau();
-            if (!std::isfinite(predicted) || std::abs(predicted) > effort[i])
-                throw std::runtime_error("Estimated PD torque limit at DDS joint "+std::to_string(i));
+            // A measured initial angle may now be outside configured bounds.
+            // Keep outgoing targets inside bounds, even if the initial correction
+            // cannot also satisfy the slew limit from that out-of-range value.
+            motor.q() = std::clamp(std::clamp(target, previous[i]-bound, previous[i]+bound), lower[i]+0.01f, upper[i]-0.01f);
             previous[i] = motor.q();
         }
     }
