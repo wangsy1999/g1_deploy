@@ -3,3 +3,9 @@
 /dist/
 *.log
 __pycache__/
+*.py[cod]
+.python-deps/
+.venv/
+*.pid
+/deployment-backups/
+/diagnostics/

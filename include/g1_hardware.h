@@ -29,6 +29,21 @@ template<class Message> uint32_t Crc(const Message& message) {
     }
     return crc;
 }
+// Integrity checks for previewing real state, without enforcing actuator readiness.
+inline void CheckTelemetryState(const unitree_hg::msg::dds_::LowState_& state) {
+    if (state.crc() != Crc(state)) throw std::runtime_error("LowState CRC mismatch");
+    if (state.mode_machine() != 5) throw std::runtime_error("Hardware requires unlocked G1 29DOF mode_machine=5");
+    for (int i = 0; i < 29; ++i) {
+        const auto& motor = state.motor_state()[i];
+        if (!std::isfinite(motor.q()) || !std::isfinite(motor.dq()) || !std::isfinite(motor.tau_est()))
+            throw std::runtime_error("Non-finite motor state");
+    }
+    double norm = 0;
+    for (float v : state.imu_state().quaternion()) norm += double(v)*v;
+    if (!std::isfinite(norm) || norm < 0.5 || norm > 1.5) throw std::runtime_error("Invalid hardware IMU quaternion");
+    for (float v : state.imu_state().gyroscope())
+        if (!std::isfinite(v)) throw std::runtime_error("Invalid hardware gyroscope");
+}
 struct Limits {
     std::array<float, 29> lower{}, upper{}, velocity{}, effort{};
     double timeout_ms = 100, max_tilt = 1.0, damping_seconds = 0.5;
@@ -61,7 +76,7 @@ struct Limits {
             if (lower[i]+0.02f >= upper[i] || velocity[i] <= 0 || effort[i] <= 0)
                 throw std::runtime_error("Invalid per-joint hardware limits");
     }
-    void CheckState(const unitree_hg::msg::dds_::LowState_& state) const {
+    void CheckState(const unitree_hg::msg::dds_::LowState_& state, unsigned remote_stop_mask = 1u << 8) const {
         if (state.crc() != Crc(state)) throw std::runtime_error("LowState CRC mismatch");
         if (state.mode_machine() != 5) throw std::runtime_error("Hardware requires unlocked G1 29DOF mode_machine=5");
         for (int i = 0; i < 29; ++i) {
@@ -85,7 +100,7 @@ struct Limits {
         // Official gamepad byte layout: 2 header bytes, then little-endian key bits.
         const auto& remote = state.wireless_remote();
         const unsigned keys = unsigned(remote[2]) | (unsigned(remote[3]) << 8);
-        if (keys & (1u << 8)) throw std::runtime_error("Remote A requested damping stop");
+        if (keys & remote_stop_mask) throw std::runtime_error("Remote requested damping stop");
     }
     void LimitCommand(unitree_hg::msg::dds_::LowCmd_& cmd,
                       const unitree_hg::msg::dds_::LowState_& state,

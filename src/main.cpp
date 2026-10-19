@@ -22,6 +22,7 @@
 #include <net/if.h>
 #include "g1_hardware.h"
 #include "g1_gamepad.h"
+#include "g1_unitree_remote.h"
 #include <unitree/robot/b2/motion_switcher/motion_switcher_client.hpp>
 
 #include <unitree/idl/hg/LowCmd_.hpp>
@@ -123,18 +124,20 @@ uint32_t CommandCrc(const LowCmd_& command) {
 
 class JointReset {
 public:
-    explicit JointReset(const ResetConfig& config, const g1_hardware::Limits* hardware, bool read_only
+    explicit JointReset(const ResetConfig& config, const g1_hardware::Limits* hardware, bool read_only, bool unitree_remote
 #ifdef G1_WITH_POLICY
         , g1_policy::Policy* policy, g1_gamepad::Device* gamepad
 #endif
-    ) : config_(config), hardware_(hardware), read_only_(read_only), publisher_("rt/lowcmd"), target_publisher_("rt/g1/reset_target"), enable_publisher_("rt/g1/reset_enable"), subscriber_("rt/lowstate") {
+    ) : config_(config), hardware_(hardware), read_only_(read_only), unitree_remote_(unitree_remote), target_publisher_("rt/g1/reset_target"), dry_target_publisher_("rt/g1/dry_run_target"), enable_publisher_("rt/g1/reset_enable"), subscriber_("rt/lowstate") {
 #ifdef G1_WITH_POLICY
         policy_ = policy;
         gamepad_ = gamepad;
 #endif
         if (!read_only_) {
-            publisher_.InitChannel();
+            // On hardware, no actuator writer exists until the explicit 9/Start handover.
+            if (!hardware_) InitMotorPublisher();
             target_publisher_.InitChannel();
+            dry_target_publisher_.InitChannel();
             enable_publisher_.InitChannel();
         }
         if (hardware_ && !read_only_) {
@@ -177,21 +180,23 @@ public:
         command.mode_pr() = 0;  // pitch/roll joint coordinates, not A/B motors
         command.mode_machine() = state.mode_machine();
         Keyboard keyboard;
-        std::cout << "Ready. Command output DISABLED. 9: power on, P: reset (" << duration
-                  << " s), Space / Ctrl+C: exit.\n";
+        auto* control_input = gamepad_ ? &gamepad_->state : unitree_remote_ ? &remote_.state : nullptr;
+        if (unitree_remote_) std::cout << "Unitree remote: Start=real handover, X=reset, A=policy, Select=stop/exit. Direct stick velocity; R1 not required.\n";
+        std::cout << "Ready. DRY RUN / command output OFF. P: reset preview (" << duration
+                  << " s), R: policy preview; 9/Start: real handover, then P required again. Space / Ctrl+C: exit.\n";
         auto start = Clock::now();
         auto next = start;
         bool active = false;
         bool output_enabled = false;
         bool publishing = false;
         bool holding = false;
-        bool power_locked = false; // Once reset starts, only restarting the process permits power-on.
+        bool power_locked = false; // Lock only after a real reset, not after a dry-run preview.
 #ifdef G1_WITH_POLICY
         bool policy_active = false;
         std::array<float, 3> velocity{};
         g1_policy::Joints policy_target{};
         auto next_policy = Clock::now();
-        std::cout << "Sequence: 9 -> P (wait for reset) -> R (policy). P: return to reset; 9 is locked after P.\n"
+        std::cout << "Dry sequence: P -> wait -> R, no 9. Real sequence: 9 -> P -> wait -> R.\n"
                   << "W/S: forward +/-0.1 m/s, A/D: lateral +/-0.1 m/s, Q/E: yaw +/-0.1 rad/s, X: zero velocity.\n";
 #endif
         auto publish_enable = [&](bool enabled) {
@@ -213,13 +218,15 @@ public:
             const auto deadline = Clock::now() + std::chrono::duration<double>(hardware_ ? hardware_->damping_seconds : 0);
             do {
                 command.crc() = CommandCrc(command);
-                if (!publisher_.Write(command) && hardware_)
+                if (!WriteMotor(command) && hardware_)
                     std::cerr << "Damping command DDS publication failed; execution is unconfirmed.\n";
                 if (hardware_) std::this_thread::sleep_for(kPeriod);
             } while (Clock::now() < deadline);
             publishing = false;
         };
         int result = 0;
+        auto next_warning = Clock::now();
+        std::string preview_warning;
         try {
         while (!stop_requested) {
             if (!Snapshot(state) || state.mode_machine() != command.mode_machine()) {
@@ -227,13 +234,27 @@ public:
                 result = 1;
                 break;
             }
+            if (hardware_ && !output_enabled && Clock::now() >= next_warning) {
+                std::string warning;
+                try { CheckHardwareState(state); }
+                catch (const std::exception& error) { warning = error.what(); }
+                if (warning != preview_warning) {
+                    std::cout << (warning.empty() ? "Hardware checks recovered.\n" :
+                        "Dry-run warning; real output blocked: " + warning + "\n");
+                    preview_warning = warning;
+                }
+                next_warning = Clock::now() + std::chrono::seconds(1);
+            }
             char key = 0;
             try {
-                key = keyboard.Read(!gamepad_);
+                key = keyboard.Read(!control_input);
                 if(gamepad_) {
                     gamepad_->Poll();
-                    const char action=gamepad_->state.Action();
-                    if(action==' ' || (key==0 && action)) key=action;
+                }
+                if (unitree_remote_) remote_.Update(state.wireless_remote());
+                if (control_input) {
+                    const char action=control_input->Action();
+                    if(action==' ' || action=='x' || (key==0 && action)) key=action;
                 }
             } catch (const std::exception& error) {
                 std::cerr << error.what() << '\n';
@@ -242,26 +263,39 @@ public:
             }
             if (key == ' ') break;
             if (key == '9') {
-                if (power_locked) {
+                if (unitree_remote_ && (!control_input->Ready() || !control_input->Centered() || control_input->MovingEnabled())) {
+                    std::cout << "Center Unitree sticks before Start/9 handover.\n";
+                } else if (power_locked) {
                     std::cout << "Power-on locked after reset/policy entry; restart the controller to power on again.\n";
                 } else if (output_enabled) {
                     std::cout << "Command output already ENABLED. Press P to reset.\n";
                 } else {
                     if (hardware_) {
+                        // Validate current real state before changing the official service.
+                        if (!Snapshot(state)) throw std::runtime_error("No fresh state before handover");
+                        CheckHardwareState(state);
                         ReleaseMotionService();
+                        InitMotorPublisher();
                         publishing = true; // Ensure faults after confirmed handover enter damping stop.
+                        output_armed_ = true;
                         if (!Snapshot(state)) throw std::runtime_error("No valid state after releasing motion service");
+                        CheckHardwareState(state);
                         for (std::size_t i = 0; i < kJointCount; ++i) previous_target[i] = state.motor_state()[i].q();
                     }
+                    // Never apply an old dry-run target when enabling real output.
+                    active = false;
+                    holding = false;
+#ifdef G1_WITH_POLICY
+                    policy_active = false;
+                    velocity.fill(0);
+                    if (policy_) policy_->Reset();
+#endif
                     output_enabled = true;
-                    std::cout << "Command output ENABLED. Press P to reset.\n";
+                    std::cout << "Command output ENABLED. Dry preview cleared; damping wait. Press P to reset from measured pose.\n";
                 }
             }
-            if ((key == 'p' || key == 'P') && !output_enabled) {
-                std::cout << "Reset requires power-on. Press 9 before P.\n";
-            }
-            if ((key == 'p' || key == 'P') && output_enabled) {
-                power_locked = true;
+            if (key == 'p' || key == 'P') {
+                power_locked = output_enabled;
 #ifdef G1_WITH_POLICY
                 policy_active = false;
                 velocity.fill(0);
@@ -281,17 +315,17 @@ public:
                 const auto neutral = policy_->DefaultDds();
                 for (std::size_t i = 0; i < kJointCount; ++i)
                     if (std::abs(state.motor_state()[i].q() - neutral[i]) > 0.35f) pose_ready = false;
-                if (!output_enabled || !active || !holding || !pose_ready) {
-                    std::cout << "Policy requires power-on and completed reset near the training pose. Follow 9 -> P -> R; wait for reset completion.\n";
-                } else if(gamepad_ && (!gamepad_->state.Ready() || !gamepad_->state.Centered() || gamepad_->state.MovingEnabled())) {
-                    std::cout<<"Center sticks and release RB before policy entry.\n";
+                if (!active || !holding || (output_enabled && !pose_ready)) {
+                    std::cout << "Policy requires completed reset. Dry run: P -> wait -> R. Real output also requires measured pose near training pose.\n";
+                } else if(control_input && (!control_input->Ready() || !control_input->Centered() || control_input->MovingEnabled())) {
+                    std::cout<<(unitree_remote_ ? "Center sticks before A/policy entry.\n" : "Center sticks and release RB before policy entry.\n");
                 } else {
                     policy_->Reset();
                     velocity.fill(0);
                     policy_active = true;
-                    if(gamepad_) gamepad_->state.BeginPolicy();
+                    if(control_input) control_input->BeginPolicy();
                     next_policy = Clock::now();
-                    std::cout << "Locomotion policy ON; velocity = [0, 0, 0]. P: reset, Space / Ctrl+C: exit.\n";
+                    std::cout << (output_enabled ? "REAL" : "DRY RUN") << " locomotion policy ON; velocity = [0, 0, 0]. P: reset, Space / Ctrl+C: exit.\n";
                 }
             }
             if (policy_active) {
@@ -306,9 +340,13 @@ public:
                     case 'x': case 'X': velocity.fill(0); break;
                     default: changed = false;
                 }
-                if(gamepad_) velocity=policy_->GamepadVelocity(gamepad_->state.ControlVelocity(key));
+                const auto previous_velocity = velocity;
+                if(control_input) velocity=policy_->GamepadVelocity(control_input->ControlVelocity(key));
                 policy_->ClampVelocity(velocity);
-                if (changed) std::cout << "Velocity: " << velocity[0] << ", " << velocity[1] << ", " << velocity[2] << '\n';
+                if (changed || (control_input && velocity != previous_velocity && (Clock::now() >= next_input_log_ || velocity == std::array<float,3>{0,0,0}))) {
+                    std::cout << "Velocity: " << velocity[0] << ", " << velocity[1] << ", " << velocity[2] << '\n';
+                    next_input_log_ = Clock::now() + std::chrono::milliseconds(200);
+                }
                 if (Clock::now() >= next_policy) {
                     g1_policy::State input;
                     for (std::size_t i = 0; i < kJointCount; ++i) {
@@ -319,7 +357,7 @@ public:
                     std::copy_n(state.imu_state().gyroscope().begin(), 3, input.omega.begin());
                     const auto inference_start = Clock::now();
                     policy_target = policy_->Step(input, velocity);
-                    if (hardware_ && Clock::now()-inference_start > std::chrono::duration<double>(policy_->dt))
+                    if (hardware_ && output_enabled && Clock::now()-inference_start > std::chrono::duration<double>(policy_->dt))
                         throw std::runtime_error("Policy inference exceeded its control period");
                     next_policy += std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(policy_->dt));
                     if (next_policy < Clock::now())
@@ -337,7 +375,7 @@ public:
                         motor.kd() = hardware_->stop_kd;
                     }
                     command.crc() = CommandCrc(command);
-                    if (!publisher_.Write(command)) throw std::runtime_error("Damping DDS publication failed");
+                    if (!WriteMotor(command)) throw std::runtime_error("Damping DDS publication failed");
                     publishing = true;
                 }
                 next += kPeriod;
@@ -369,15 +407,21 @@ public:
                 motor.dq() = 0;
                 motor.tau() = 0;
             }
-            if (hardware_) {
+            if (hardware_ && output_enabled) {
                 if (!Snapshot(state)) throw std::runtime_error("Hardware state invalid before command publication: " + StateError());
                 hardware_->LimitCommand(command, state, previous_target, 0.002);
             }
             command.crc() = CommandCrc(command);
-            // Telemetry only: the simulator does not subscribe to this topic.
-            target_publisher_.Write(command);
+            // Preview has a separate telemetry topic; it is never sent to actuators.
+            if (output_enabled) target_publisher_.Write(command);
+            else {
+                auto preview = command;
+                for (auto& motor : preview.motor_cmd()) motor.mode() = 0;
+                preview.crc() = CommandCrc(preview);
+                dry_target_publisher_.Write(preview);
+            }
             if (output_enabled) {
-                if (!publisher_.Write(command)) throw std::runtime_error("LowCmd DDS publication failed");
+                if (!WriteMotor(command)) throw std::runtime_error("LowCmd DDS publication failed");
                 publishing = true;
             }
             if (u == 1.0 && !holding) {
@@ -399,6 +443,19 @@ public:
     }
 
 private:
+    void CheckHardwareState(const LowState_& state) const {
+        hardware_->CheckState(state, unitree_remote_ ? 1u << 3 : 1u << 8);
+    }
+    void InitMotorPublisher() {
+        if (publisher_) return;
+        publisher_ = std::make_unique<unitree::robot::ChannelPublisher<LowCmd_>>("rt/lowcmd");
+        publisher_->InitChannel();
+    }
+    bool WriteMotor(const LowCmd_& command) {
+        if (!publisher_ || (hardware_ && !output_armed_))
+            throw std::runtime_error("Actuator publication requires explicit 9/Start handover");
+        return publisher_->Write(command);
+    }
     g1_gamepad::Device* gamepad_ = nullptr;
 #ifdef G1_WITH_POLICY
     g1_policy::Policy* policy_ = nullptr;
@@ -409,12 +466,20 @@ private:
         valid_ = false;
         if (hardware_fault_) return;
         if (hardware_) {
-            try { hardware_->CheckState(state); }
-            catch (const std::exception& error) { state_error_ = error.what(); hardware_fault_ = true; return; }
+            try {
+                if (read_only_ || output_armed_) CheckHardwareState(state);
+                else g1_hardware::CheckTelemetryState(state);
+            }
+            catch (const std::exception& error) {
+                state_error_ = error.what();
+                hardware_fault_ = read_only_ || output_armed_;
+                return;
+            }
         }
         for (std::size_t i = 0; i < kJointCount; ++i)
             if (!std::isfinite(state.motor_state()[i].q()) || !std::isfinite(state.motor_state()[i].dq())) return;
         state_ = state;
+        state_error_.clear();
         received_at_ = Clock::now();
         valid_ = true;
     }
@@ -447,6 +512,10 @@ private:
     const ResetConfig config_;
     const g1_hardware::Limits* hardware_ = nullptr;
     bool read_only_ = false;
+    bool unitree_remote_ = false;
+    g1_unitree_remote::Input remote_;
+    Clock::time_point next_input_log_{};
+    std::atomic<bool> output_armed_{false};
     bool hardware_fault_ = false; // A hardware validation failure requires restarting the process.
     std::string state_error_;
     std::atomic<bool> command_seen_{false};
@@ -455,8 +524,9 @@ private:
     LowState_ state_{};
     Clock::time_point received_at_{};
     bool valid_ = false;
-    unitree::robot::ChannelPublisher<LowCmd_> publisher_;
+    std::unique_ptr<unitree::robot::ChannelPublisher<LowCmd_>> publisher_;
     unitree::robot::ChannelPublisher<LowCmd_> target_publisher_;
+    unitree::robot::ChannelPublisher<LowCmd_> dry_target_publisher_;
     unitree::robot::ChannelPublisher<LowCmd_> enable_publisher_;
     unitree::robot::ChannelSubscriber<LowState_> subscriber_;
 };
@@ -464,6 +534,7 @@ private:
 int main(int argc, char** argv) {
 #ifdef G1_WITH_POLICY
     std::string joystick_path;
+    bool unitree_remote=false;
     bool check_joystick=false;
     std::vector<char*> positional{argv[0]};
     for(int i=1;i<argc;++i) {
@@ -471,7 +542,8 @@ int main(int argc, char** argv) {
         if(argument=="--joystick") {
             if(i+1==argc) {std::cerr<<"--joystick requires a device path\n";return 1;}
             joystick_path=argv[++i];
-        } else if(argument=="--check-joystick") check_joystick=true;
+        } else if(argument=="--unitree-remote") unitree_remote=true;
+        else if(argument=="--check-joystick") check_joystick=true;
         else positional.push_back(argv[i]);
     }
     argc=static_cast<int>(positional.size());
@@ -482,6 +554,9 @@ int main(int argc, char** argv) {
     const std::string program = argv[0];
     if (hardware) { --argc; ++argv; }
 #ifdef G1_WITH_POLICY
+    if (unitree_remote && (!hardware || read_only || check_joystick || !joystick_path.empty())) {
+        std::cerr<<"--unitree-remote requires --hardware and cannot be combined with F710 or input/read-only checks.\n";return 1;
+    }
     if(hardware && check_joystick) {
         std::cerr<<"Use --check-joystick without --hardware; input diagnostics never connect to DDS.\n";return 1;
     }
@@ -525,6 +600,7 @@ int main(int argc, char** argv) {
         std::cout << "Optional argument after locomotion.yaml: [model.onnx]\n"
                   << "Offline inference: --check-policy [model.onnx] [deploy.yaml]\n"
                   << "F710: --joystick /dev/input/js0; input-only check: --check-joystick [--joystick DEVICE]\n"
+                  << "Unitree remote: --unitree-remote; Start enables, X reset, A policy, Select stop; direct sticks, no R1 gate.\n"
                   << "Start enable, A reset, Y run; hold RB + left stick XY/right stick X to move; X zero, B exit.\n";
 #endif
         return argc > max_args ? 1 : 0;
@@ -570,7 +646,7 @@ int main(int argc, char** argv) {
         std::signal(SIGINT, Stop);
         std::signal(SIGHUP, Stop);
         unitree::robot::ChannelFactory::Instance()->Init(domain, argc > 2 ? argv[2] : "lo");
-        JointReset controller(config, hardware_limits.get(), read_only
+        JointReset controller(config, hardware_limits.get(), read_only, unitree_remote
 #ifdef G1_WITH_POLICY
             , policy.get(), gamepad.get()
 #endif

@@ -31,8 +31,9 @@ class State {
     bool stop_=false;
     bool motion_armed_=false;
     bool locomotion_=false, have_x_=false;
+    bool require_hold_=true;
 public:
-    explicit State(bool locomotion=false):locomotion_(locomotion) {}
+    explicit State(bool locomotion=false,bool require_hold=true):locomotion_(locomotion),require_hold_(require_hold) {}
     static float Deadzone(float v) {
         constexpr float dead=.12f;
         v=std::clamp(v,-1.f,1.f);
@@ -72,7 +73,7 @@ public:
     bool Centered() const {return Deadzone(axes_[ABS_Y])==0 && Deadzone(axes_[ABS_RX])==0 && (!locomotion_ || Deadzone(axes_[ABS_X])==0);}
     std::array<float,2> Sticks() const {return {-Deadzone(axes_[ABS_Y]),-Deadzone(axes_[ABS_RX])};}
     std::array<float,3> Velocity() const {
-        if(!Ready() || !MovingEnabled()) return {0,0,0};
+        if(!Ready() || (require_hold_ && !MovingEnabled())) return {0,0,0};
         if(locomotion_) return {-Deadzone(axes_[ABS_Y]),-Deadzone(axes_[ABS_X]),-Deadzone(axes_[ABS_RX])};
         return {std::clamp(-Deadzone(axes_[ABS_Y]),0.f,1.f),0,-Deadzone(axes_[ABS_RX])};
     }

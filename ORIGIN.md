@@ -5,6 +5,15 @@ The source includes subsequent local DreamWaQ hardware deployment changes.
 This is an independent source tree; no submodule, symlink or parent repository is required.
 The original repository LICENSE is retained. Unitree SDK2 and ONNX Runtime are external dependencies.
 
+The web monitor was synchronized from the tested robot deployment on 2026-10-19.
+It originates from `simulate_python/joint_monitor.py` and
+`simulate_python/web/joint_monitor.html` in the same `unitree_mujoco` commit above,
+with the onboard domain-0, dry-run telemetry and Chinese UI changes retained.
+In this repository it lives in `web/joint_monitor.py` and
+`web/static/joint_monitor.html`; only the static-resource path was adjusted.
+`scripts/monitor.sh` replaces the robot-specific absolute-path launcher with a
+relocatable source/install launcher. Python SDK and CycloneDDS are external dependencies.
+
 Model: `models/policy.onnx`
 SHA256: `4f23975849ef66d73a170ee3435a274a4c42dd31830f8b07161add84846a871d`
 

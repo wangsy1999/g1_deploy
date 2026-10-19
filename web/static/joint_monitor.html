@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>G1 · 关节实时监控</title>
+<style>
+:root{color-scheme:dark;font:14px system-ui,sans-serif;color:#dce5f1;background:#0b111b}
+*{box-sizing:border-box}body{margin:0;padding:28px;max-width:1600px;margin-inline:auto}
+header{display:flex;justify-content:space-between;align-items:center;gap:20px;flex-wrap:wrap}h1{font-size:25px;margin:0 0 6px;letter-spacing:.02em}p{color:#91a0b5;margin:0;line-height:1.7}
+.status{padding:9px 15px;border:1px solid #354257;border-radius:30px;color:#a6b5c9}.live{color:#6ee7b7;border-color:#326253}.bad{color:#fbbf75;border-color:#85613b}
+.stats{display:flex;gap:30px;margin:24px 0;padding:18px 22px;background:#131d2b;border:1px solid #25334a;border-radius:12px}.stats span{color:#91a0b5}.stats b{display:block;margin-top:5px;font-size:22px;color:#eef4ff;font-variant-numeric:tabular-nums}
+.layout{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(300px,1fr);gap:20px}.panel{background:#111b29;border:1px solid #25334a;border-radius:12px;overflow:hidden}
+.toolbar{display:flex;gap:10px;padding:16px;align-items:center;flex-wrap:wrap}input,select,button{font:inherit;color:#dce5f1;background:#0b1422;border:1px solid #34445d;border-radius:7px;padding:9px 12px}input{flex:1;min-width:130px}button{cursor:pointer}button:hover{border-color:#65d4c4}
+.scroll{max-height:70vh;overflow:auto}table{border-collapse:collapse;width:100%;white-space:nowrap;font-size:12px}th,td{padding:10px 12px;text-align:right;border-bottom:1px solid #233047;font-variant-numeric:tabular-nums}th{background:#172337;position:sticky;top:0;color:#a3b4cd;z-index:1}th:first-child,td:first-child{text-align:left}tbody tr{cursor:pointer}tbody tr:hover{background:#1b2c42}tr.selected{background:#1c3548}td:first-child{color:#b7cde5}td.inactive{color:#77879d}
+.detail{padding:18px}.detail h2{font-size:15px;word-break:break-all;margin:0 0 8px}label{color:#a3b4cd}canvas{width:100%;height:150px;display:block;margin:8px 0 18px;background:#0b1422;border-radius:8px}.joint-check{width:16px;height:16px;min-width:0;padding:0;flex:none;accent-color:#63ddcc;cursor:pointer}.joint-legend{display:flex;flex-wrap:wrap;gap:8px 14px;margin-bottom:14px;font-size:12px;word-break:break-all}.legend{font-size:12px;color:#91a0b5;margin:10px 0 18px}.measured{color:#63ddcc}.target{color:#fbbf75}.empty{padding:40px;text-align:center;color:#91a0b5}footer{margin-top:18px;color:#77879d;font-size:12px;line-height:1.8}
+.imu-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:20px}.imu-card{padding:16px}.imu-card h2{font-size:14px;color:#a3b4cd;margin:0 0 12px}.imu-vector{display:flex;gap:16px;flex-wrap:wrap}.imu-vector span{color:#91a0b5}.imu-vector b{display:block;margin-top:4px;color:#dce5f1;font-size:17px;font-variant-numeric:tabular-nums}@media(max-width:1000px){.imu-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:500px){.imu-grid{grid-template-columns:1fr}}
+@media(max-width:1000px){.layout{grid-template-columns:1fr}.scroll{max-height:55vh}body{padding:16px}.stats{gap:20px;flex-wrap:wrap}}:focus-visible{outline:2px solid #63ddcc;outline-offset:2px}
+</style>
+</head>
+<body>
+<header><div><h1>G1 <span style="color:#63ddcc">/</span> 关节实时监控</h1><p>查看关节状态、跟踪误差与最近 20 秒的变化</p></div><div id="status" class="status" role="status">正在连接…</div></header>
+<div class="stats"><span>控制端 Enable<b id="enable">—</b></span><span>关节数量<b id="count">—</b></span><span>监控时间 / s<b id="time">—</b></span><span>最大跟踪误差<b id="error">—</b></span><span>数据年龄 / ms<b id="age">—</b></span></div>
+<section class="imu-grid" aria-label="IMU 实时读数">
+<div class="panel imu-card"><h2 id="imu-rpy-label">姿态 RPY / rad</h2><div class="imu-vector"><span>Roll<b id="imu-rpy-0">—</b></span><span>Pitch<b id="imu-rpy-1">—</b></span><span>Yaw<b id="imu-rpy-2">—</b></span></div></div>
+<div class="panel imu-card"><h2 id="imu-gyroscope-label">角速度 / rad/s</h2><div class="imu-vector"><span>X<b id="imu-gyroscope-0">—</b></span><span>Y<b id="imu-gyroscope-1">—</b></span><span>Z<b id="imu-gyroscope-2">—</b></span></div></div>
+<div class="panel imu-card"><h2 id="imu-accelerometer-label">加速度 / m/s²</h2><div class="imu-vector"><span>X<b id="imu-accelerometer-0">—</b></span><span>Y<b id="imu-accelerometer-1">—</b></span><span>Z<b id="imu-accelerometer-2">—</b></span></div></div>
+<div class="panel imu-card"><h2 id="imu-quaternion-label">四元数 / w, x, y, z</h2><div class="imu-vector"><span>W<b id="imu-quaternion-0">—</b></span><span>X<b id="imu-quaternion-1">—</b></span><span>Y<b id="imu-quaternion-2">—</b></span><span>Z<b id="imu-quaternion-3">—</b></span></div></div>
+</section>
+<main class="layout">
+<section class="panel" aria-label="关节数据"><div class="toolbar"><input id="search" placeholder="搜索关节，例如 elbow" aria-label="搜索关节"><select id="unit" aria-label="角度单位"><option value="rad">弧度 rad</option><option value="deg">角度 °</option></select><button id="pause">暂停显示</button></div>
+<div class="scroll"><table><thead><tr><th>绘图</th><th>关节 / DDS ID</th><th>Enable</th><th id="qHead">角度 rad</th><th>目标</th><th>误差</th><th id="vHead">速度 rad/s</th><th>力矩 Nm</th><th>Kp / Kd</th></tr></thead><tbody id="rows"></tbody></table><div id="empty" class="empty">等待机器人数据…</div></div></section>
+<section class="panel detail"><h2 id="selected">勾选关节查看曲线</h2><p id="control">可同时勾选多个关节</p><div id="jointLegend" class="joint-legend"></div><div class="legend">━ 实际值　┄ 同色虚线为目标值</div><label id="angleLabel">角度 / rad</label><canvas id="angle" aria-label="关节角度曲线"></canvas><label id="speedLabel">速度 / rad/s</label><canvas id="speed" aria-label="关节速度曲线"></canvas><label>反馈力矩 / Nm</label><canvas id="torque" aria-label="关节力矩曲线"></canvas></section>
+</main><footer>网页仅用于查看。IMU 来自 LowState，RPY 由 w,x,y,z 四元数计算；加速度为原始反馈，未去除重力。Enable 为控制端命令输出开关；使能状态超过 500 ms 未更新时显示为 —。C++ 控制程序中按 P 复位、R 进入策略；未按 9 时为空跑，虚线仅为计算目标，机器人不跟随。空跑不改变其他控制服务的状态。力矩为 DDS LowState 的 tau_est 反馈值；目标由独立话题推送，未使能也显示；目标数据超过 500 ms 未更新时显示为 —。后台默认最高 50 Hz 采样并推送，网页按屏幕刷新率绘制。</footer>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+let latest=null, paused=false, dirty=false;
+const selected=new Set(), histories=new Map();
+const rowCache=new Map();
+let rateStarted=performance.now(), rateSamples=0, measuredRate=0, receivedSample=-1;
+const factor=()=>$('unit').value==='deg'?180/Math.PI:1;
+const suffix=()=>$('unit').value==='deg'?'°':'rad';
+const fmt=x=>Number.isFinite(x)?x.toFixed(3):'—';
+function status(text,kind=''){ $('status').textContent=text; $('status').className='status '+kind; }
+const jointColor=index=>`hsl(${(index*137.508)%360} 75% 67%)`;
+function selectJoint(name,checked){
+ if(checked){selected.add(name);histories.set(name,{points:[],sample:-1});}
+ else{selected.delete(name);histories.delete(name);}
+ record();render();
+}
+function renderImu(){
+ const imu=latest.age_ms!==null&&latest.age_ms<=1000?latest.imu:null;
+ $('imu-rpy-label').textContent='姿态 RPY / '+suffix();
+ $('imu-gyroscope-label').textContent='角速度 / '+suffix()+'/s';
+ for(const [key,size] of [['rpy',3],['gyroscope',3],['accelerometer',3],['quaternion',4]]){
+  const values=imu?.[key],f=(key==='rpy'||key==='gyroscope')?factor():1;
+  for(let i=0;i<size;i++)$('imu-'+key+'-'+i).textContent=values?fmt(values[i]*f):'—';
+ }
+}
+function render(){
+ if(!latest)return;
+ renderImu();
+ const joints=latest.joints, f=factor();
+ $('enable').textContent=latest.dry_run?'OFF · 空跑':latest.output_enabled===true?'ON':latest.output_enabled===false?'OFF':'—';
+ $('enable').style.color=latest.output_enabled===true?'#6ee7b7':latest.output_enabled===false?'#fbbf75':'#91a0b5';
+ $('count').textContent=joints.length; $('time').textContent=fmt(latest.simulation_time);
+ $('age').textContent=latest.age_ms===null?'—':Math.round(latest.age_ms);
+ const active=joints.filter(j=>j.target_available); $('error').textContent=active.length?fmt(Math.max(...active.map(j=>Math.abs(j.error)))*f)+' '+suffix():'—';
+ $('qHead').textContent='角度 '+suffix(); $('vHead').textContent='速度 '+suffix()+'/s';
+ const query=$('search').value.trim().toLowerCase(), visible=joints.filter(j=>j.name.toLowerCase().includes(query));
+ for(const joint of joints){
+  let row=rowCache.get(joint.name);
+  if(!row){
+   row=document.createElement('tr');
+   const cell=document.createElement('td'),checkbox=document.createElement('input');
+   checkbox.type='checkbox';checkbox.className='joint-check';checkbox.setAttribute('aria-label','绘图 '+joint.name);
+   checkbox.onchange=()=>selectJoint(joint.name,checkbox.checked);cell.appendChild(checkbox);row.appendChild(cell);
+   for(let i=0;i<8;i++)row.appendChild(document.createElement('td'));
+   rowCache.set(joint.name,row);$('rows').appendChild(row);
+  }
+  row.className=selected.has(joint.name)?'selected':'';
+  row.children[0].children[0].checked=selected.has(joint.name);
+  row.hidden=!joint.name.toLowerCase().includes(query);
+  const values=[joint.name+' / '+joint.index,joint.enabled===true?'ON':joint.enabled===false?'OFF':'—',fmt(joint.q*f),joint.target_available?fmt(joint.q_target*f):'—',joint.target_available?fmt(joint.error*f):'—',fmt(joint.dq*f),fmt(joint.tau),joint.kp+' / '+joint.kd];
+  values.forEach((value,i)=>{if(row.children[i+1].textContent!==String(value))row.children[i+1].textContent=value;});
+  row.children[2].style.color=joint.enabled===true?'#6ee7b7':joint.enabled===false?'#fbbf75':'#91a0b5';
+ }
+ $('empty').hidden=visible.length>0;$('empty').textContent=joints.length?'没有匹配的关节':'等待机器人数据…';
+ $('selected').textContent=selected.size?'已勾选 '+selected.size+' 个关节':'勾选关节查看曲线';
+ $('control').textContent=selected.size?'各关节使用独立颜色，目标值使用同色虚线':'在左侧勾选一个或多个关节';
+ $('jointLegend').replaceChildren();
+ for(const joint of joints.filter(j=>selected.has(j.name))){
+  const label=document.createElement('span');label.style.color=jointColor(joint.index);label.textContent='━ '+joint.name;$('jointLegend').appendChild(label);
+ }
+ $('angleLabel').textContent='角度 / '+suffix();$('speedLabel').textContent='速度 / '+suffix()+'/s';
+ plot('angle','q','qt');plot('speed','v','vt');plot('torque','tau');
+}
+function record(){
+ if(!latest)return;
+ for(const joint of latest.joints){
+  const series=histories.get(joint.name);if(!series||series.sample===latest.sample_id)continue;
+  const t=latest.simulation_time,points=series.points;
+  if(points.length&&t<points.at(-1).t)points.length=0;
+  points.push({t,q:joint.q,qt:joint.target_available?joint.q_target:null,v:joint.dq,vt:joint.target_available?joint.dq_target:null,tau:joint.tau});
+  while(points.length&&(points[0].t<t-20||points.length>10000))points.shift();
+  series.sample=latest.sample_id;
+ }
+}
+function clearHistory(){for(const series of histories.values()){series.points=[];series.sample=-1;}}
+function plot(id,key,target){
+ const canvas=$(id), scale=window.devicePixelRatio||1, w=canvas.clientWidth,h=150;
+ if(canvas.width!==Math.round(w*scale)||canvas.height!==Math.round(h*scale)){canvas.width=Math.round(w*scale);canvas.height=Math.round(h*scale);}
+ const ctx=canvas.getContext('2d');ctx.setTransform(scale,0,0,scale,0,0);ctx.clearRect(0,0,w,h);
+ const series=latest.joints.filter(j=>selected.has(j.name)).map(j=>({color:jointColor(j.index),points:histories.get(j.name).points})).filter(s=>s.points.length);
+ if(!series.length){ctx.fillStyle='#91a0b5';ctx.font='12px system-ui';ctx.fillText('请勾选需要绘图的关节',20,75);return;}
+ const f=key==='tau'?1:factor();let low=Infinity,high=-Infinity;
+ for(const s of series)for(const p of s.points)for(const field of target?[key,target]:[key]){
+  if(Number.isFinite(p[field])){low=Math.min(low,p[field]*f);high=Math.max(high,p[field]*f);}
+ }
+ const padding=Math.max((high-low)*.15,.01);low-=padding;high+=padding;
+ const end=latest.simulation_time,begin=end-20;
+ const x=t=>48+(t-begin)/20*(w-62),y=v=>12+(high-v)/(high-low)*(h-36);
+ ctx.font='10px system-ui';ctx.fillStyle='#91a0b5';ctx.strokeStyle='#233047';ctx.lineWidth=1;ctx.setLineDash([]);
+ for(let i=0;i<3;i++){const v=low+(high-low)*i/2;ctx.beginPath();ctx.moveTo(46,y(v));ctx.lineTo(w-10,y(v));ctx.stroke();ctx.fillText(v.toFixed(2),3,y(v)+3);}
+ ctx.fillText('−20 s',48,h-6);ctx.fillText('现在',w-35,h-6);
+ function line(points,field,color,dash){ctx.strokeStyle=color;ctx.setLineDash(dash);ctx.lineWidth=1.6;ctx.beginPath();let started=false;
+  for(const p of points){if(!Number.isFinite(p[field])){started=false;continue;}if(!started){ctx.moveTo(x(p.t),y(p[field]*f));started=true;}else ctx.lineTo(x(p.t),y(p[field]*f));}ctx.stroke();}
+ for(const s of series){line(s.points,key,s.color,[]);if(target)line(s.points,target,s.color,[5,4]);}
+}
+// One persistent connection; ingest every received sample independently of drawing.
+const stream=new EventSource('/api/stream');
+stream.onmessage=event=>{
+ const data=JSON.parse(event.data);
+ if(data.sample_id<receivedSample){clearHistory();rateSamples=0;rateStarted=performance.now();}
+ if(data.sample_id!==receivedSample&&data.joints.length)rateSamples++;
+ receivedSample=data.sample_id;
+ const now=performance.now();
+ if(now-rateStarted>=1000){measuredRate=Math.round(rateSamples*1000/(now-rateStarted));rateSamples=0;rateStarted=now;}
+ if(!paused){latest=data;record();dirty=true;}
+ if(paused)status('显示已暂停');else if(!data.joints.length)status('等待机器人数据');else if(data.age_ms>1000)status('数据未更新 / 机器人状态流可能中断','bad');else status('实时连接 · '+measuredRate+' Hz','live');
+};
+stream.onerror=()=>status('连接中断 · 自动重试','bad');
+function draw(){if(dirty){dirty=false;render();}requestAnimationFrame(draw);}
+requestAnimationFrame(draw);
+window.addEventListener('beforeunload',()=>stream.close());
+$('search').oninput=render;$('unit').onchange=render;
+$('pause').onclick=()=>{paused=!paused;$('pause').textContent=paused?'继续显示':'暂停显示';if(!paused)clearHistory();};
+window.addEventListener('resize',()=>{dirty=true;});
+</script>
+</body>
+</html>

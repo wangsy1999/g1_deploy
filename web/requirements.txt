@@ -1,0 +1,3 @@
+cyclonedds==0.10.2
+numpy>=1.21,<3
+# Also install the official unitree_sdk2py package; see docs/WEB.md.

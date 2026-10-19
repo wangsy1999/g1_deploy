@@ -10,12 +10,15 @@ usage() {
 Usage:
   ./g1 check                         Offline ONNX inference, no DDS
   ./g1 interfaces                    Show local network interfaces and route to control PC
+  ./g1 monitor INTERFACE [HOST] [PORT] Start the read-only web monitor (Python dependencies needed)
   ./g1 joystick [DEVICE]             Read-only F710 input check, no DDS
   ./g1 read-only ROBOT_INTERFACE      Subscribe to hardware state, no commands or mode release
   ./g1 run ROBOT_INTERFACE [DEVICE]   Hardware control, optional F710 jsdev path
+  ./g1 run ROBOT_INTERFACE remote     Unitree: Start enables, X reset, A policy, Select stop; no R1 gate
 
 Example interface: eth0 (use the actual onboard interface, never lo).
-run starts disabled; keyboard 9 -> p -> wait -> r, or F710 Start -> A -> wait -> Y.
+run starts in dry run: p -> wait -> r previews targets without actuator commands.
+9/Start enables real output and clears preview; then p -> wait -> r is required again.
 Default model/config are loaded from this package, not the build machine.
 HELP
 }
@@ -30,6 +33,9 @@ if [[ "$mode" == interfaces ]]; then
     exit 0
 fi
 export LD_LIBRARY_PATH="$package_dir/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+if [[ "$mode" == monitor ]]; then
+    exec "$package_dir/monitor" "$@"
+fi
 [[ -x "$controller" ]] || { echo "Missing executable: $controller" >&2; exit 1; }
 case "$mode" in
     check)
@@ -52,6 +58,9 @@ case "$mode" in
             exec "$controller" --hardware-read-only 3 "$robot_interface" 0 "$config"
         fi
         if (($#)); then
+            if [[ "$1" == remote ]]; then
+                exec "$controller" --hardware 3 "$robot_interface" 0 "$config" "$model" --unitree-remote
+            fi
             exec "$controller" --hardware 3 "$robot_interface" 0 "$config" "$model" --joystick "$1"
         fi
         exec "$controller" --hardware 3 "$robot_interface" 0 "$config" "$model"

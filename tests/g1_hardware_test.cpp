@@ -17,6 +17,27 @@ int main(int argc, char** argv) {
             state.motor_state()[cfg["joint_ids_map"][i].as<int>()].q() = cfg["default_joint_pos"][i].as<float>();
         state.crc() = g1_hardware::Crc(state);
         limits.CheckState(state);
+        g1_hardware::CheckTelemetryState(state);
+        // A preview may inspect an out-of-range pose, but real arming must reject it.
+        auto preview_state = state;
+        preview_state.motor_state()[9].q() = limits.lower[9] - 0.02f;
+        preview_state.crc() = g1_hardware::Crc(preview_state);
+        g1_hardware::CheckTelemetryState(preview_state);
+        bool arming_rejected = false;
+        try { limits.CheckState(preview_state); } catch (const std::runtime_error&) { arming_rejected = true; }
+        Require(arming_rejected, "Preview pose bypassed real arming protection");
+        auto reject_preview = [&](const std::function<void(State&)>& change, bool recalc = true) {
+            auto altered = state; change(altered);
+            if (recalc) altered.crc() = g1_hardware::Crc(altered);
+            bool rejected = false;
+            try { g1_hardware::CheckTelemetryState(altered); } catch (const std::runtime_error&) { rejected = true; }
+            Require(rejected, "Invalid telemetry accepted by preview");
+        };
+        reject_preview([](State& s){ s.crc() ^= 1; }, false);
+        reject_preview([](State& s){ s.mode_machine() = 0; });
+        reject_preview([](State& s){ s.motor_state()[0].q() = std::numeric_limits<float>::quiet_NaN(); });
+        reject_preview([](State& s){ s.imu_state().quaternion() = {0,0,0,0}; });
+        reject_preview([](State& s){ s.imu_state().gyroscope()[0] = std::numeric_limits<float>::infinity(); });
         auto reject = [&](const std::function<void(State&)>& change, bool recalc = true) {
             auto altered = state; change(altered);
             if (recalc) altered.crc() = g1_hardware::Crc(altered);
@@ -32,6 +53,15 @@ int main(int argc, char** argv) {
         reject([](State& s){ s.imu_state().quaternion() = {0,1,0,0}; });
         reject([](State& s){ s.imu_state().quaternion() = {0,0,0,0}; });
         reject([](State& s){ s.wireless_remote()[3] = 1; }); // A bit
+        auto original_remote = state;
+        original_remote.wireless_remote()[3] = 1; // A is policy in explicit Unitree remote mode.
+        original_remote.crc() = g1_hardware::Crc(original_remote);
+        limits.CheckState(original_remote,1u<<3);
+        original_remote.wireless_remote()[2] = 1u<<3; // Select must still stop even while A is held.
+        original_remote.crc() = g1_hardware::Crc(original_remote);
+        bool select_rejected=false;
+        try {limits.CheckState(original_remote,1u<<3);}catch(const std::runtime_error&){select_rejected=true;}
+        Require(select_rejected,"Unitree Select failed to stop real control");
         reject([](State& s){ s.motor_state()[0].q() = 100; });
         reject([](State& s){ s.motor_state()[0].dq() = 100; });
         std::array<float,29> previous{};
