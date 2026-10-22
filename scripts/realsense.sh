@@ -10,4 +10,12 @@ fi
 if [[ -d "$root_dir/.python-deps" ]]; then
     export PYTHONPATH="$root_dir/.python-deps${PYTHONPATH:+:$PYTHONPATH}"
 fi
-exec "${PYTHON_BIN:-python3}" -u "$root_dir/camera/realsense_web.py" "$@"
+python="${PYTHON_BIN:-python3}"
+for dependency_root in "$root_dir/.deps" "$root_dir/../.deps"; do
+    if [[ -z "${PYTHON_BIN:-}" && -x "$dependency_root/python/bin/python3" ]]; then
+        python="$dependency_root/python/bin/python3"
+        export LD_LIBRARY_PATH="$dependency_root/realsense/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        break
+    fi
+done
+exec "$python" -u "$root_dir/camera/realsense_web.py" "$@"

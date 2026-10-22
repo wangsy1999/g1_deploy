@@ -21,7 +21,10 @@ JOINT_NAMES = (
 
 def read_imu(msg):
     """LowState quaternion is w,x,y,z; derive RPY for bridges omitting rpy."""
-    source = getattr(msg, "imu_state", None)
+    return read_imu_state(getattr(msg, "imu_state", None))
+
+
+def read_imu_state(source):
     if source is None:
         return None
     def vector(name, size):
@@ -47,6 +50,9 @@ class JointMonitor:
             raise ValueError("Joint monitor rate must be positive")
         self.period = 1.0 / rate_hz
         self.last_capture = None
+        self.torso_imu = None
+        self.torso_at = None
+        self.torso_count = 0
         self.lock = threading.Lock()
         self.changed = threading.Condition(self.lock)
         self.stopping = threading.Event()
@@ -75,9 +81,7 @@ class JointMonitor:
                     content, mime = monitor.html, "text/html; charset=utf-8"
                 elif path == "/api/joints":
                     with monitor.lock:
-                        state = dict(monitor.snapshot)
-                        state["age_ms"] = (None if monitor.last_capture is None else
-                            round((time.monotonic() - monitor.last_capture) * 1000, 1))
+                        state = monitor.snapshot_locked()
                     content = json.dumps(state, allow_nan=False).encode()
                     mime = "application/json; charset=utf-8"
                 else:
@@ -113,9 +117,7 @@ class JointMonitor:
                             if monitor.stopping.is_set():
                                 break
                             previous = monitor.snapshot["sample_id"]
-                            state = dict(monitor.snapshot)
-                            state["age_ms"] = (None if monitor.last_capture is None else
-                                round((time.monotonic() - monitor.last_capture) * 1000, 1))
+                            state = monitor.snapshot_locked()
                         content = json.dumps(state, allow_nan=False, separators=(",", ":"))
                         self.wfile.write(("data: " + content + "\n\n").encode())
                         self.wfile.flush()
@@ -131,6 +133,35 @@ class JointMonitor:
         self.thread.start()
         host, port = self.server.server_address[:2]
         print(f"Joint monitor: http://{host}:{port}", flush=True)
+
+    def snapshot_locked(self):
+        # Called with self.lock held. Recompute torso freshness even if LowState stops.
+        now = time.monotonic()
+        state = dict(self.snapshot)
+        state["age_ms"] = None if self.last_capture is None else round((now-self.last_capture)*1000, 1)
+        age = None if self.torso_at is None else (now-self.torso_at)*1000
+        state["torso_imu"] = {"topic": "rt/secondary_imu", "age_ms": None if age is None else round(age, 1),
+                              "fresh": age is not None and age < 100 and self.torso_imu is not None,
+                              "valid": self.torso_imu is not None, "samples": self.torso_count,
+                              "data": self.torso_imu}
+        return state
+
+    def on_torso_imu(self, msg):
+        data = read_imu_state(msg)
+        if data is not None:
+            q = data["quaternion"]
+            norm = sum(v*v for v in q) if q is not None else 0
+            if not .5 <= norm <= 1.5 or data["gyroscope"] is None:
+                data = None
+            else:
+                w,x,y,z = q
+                data["projected_gravity"] = [2*(w*y-x*z)/norm, -2*(w*x+y*z)/norm,
+                                             (2*(x*x+y*y)-norm)/norm]
+        with self.changed:
+            self.torso_imu = data
+            self.torso_at = time.monotonic()
+            self.torso_count += 1
+            self.changed.notify_all()
 
     def on_command(self, msg):
         if len(msg.motor_cmd) < len(self.names):
@@ -247,7 +278,7 @@ def main():
     if args.domain < 0 or not 1 <= args.port <= 65535 or not math.isfinite(args.rate) or args.rate <= 0:
         parser.error("domain must be nonnegative; rate must be positive; port must be 1..65535")
     from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelSubscriber
-    from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_, LowCmd_
+    from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_, LowCmd_, IMUState_
 
     monitor = JointMonitor(args.host, args.port, args.rate)
     subscribers = []
@@ -255,6 +286,7 @@ def main():
         ChannelFactoryInitialize(args.domain, args.interface)
         for topic, message_type, callback in (
                 ("rt/lowstate", LowState_, monitor.on_state),
+                ("rt/secondary_imu", IMUState_, monitor.on_torso_imu),
                 ("rt/lowcmd", LowCmd_, monitor.on_command),
                 ("rt/g1/reset_target", LowCmd_, monitor.on_target),
                 ("rt/g1/dry_run_target", LowCmd_, monitor.on_dry_target),

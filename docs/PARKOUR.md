@@ -4,6 +4,23 @@
 代码/模型移植自 `wangsy1999/unitree_mujoco` 提交 `7c6642f89e25f72dd7de3cf7683f166bce943fef` 的 `example/cpp/g1_parkour_policy.h`、`example/parkour/g1.json` 和 `exported/g1_parkour/`。
 MuJoCo 仿真器、XML、网格仍放在外部仓库，不内置本仓库；所有验证均不使用 Isaac Sim。
 
+
+## 相机链路对齐 Instinct（2026-10-22）
+
+参考版本：`project-instinct/instinct_onboard@b6965a4202d8dceaf163dd95edb7742ed5d65e38`。
+
+- 默认仅开启 Z16 深度，480×270、60 Hz；RGB 默认关闭，可用 `--color` 打开可选预览。
+- 实机策略预处理与该版本 `ParkourAgent.refresh_depth_frame` 顺序一致：最近邻缩放至64×36，裁剪 `[18,0,16,16]`，对小于0.2米区域用半径3的 OpenCV INPAINT_NS 补洞，3×3/sigma=1 高斯模糊，裁剪0–2.5米并归一化至0–1。参数写在 `config/realsense_parkour.json`。
+- 处理后的32×18 float32图以 `G1DEP002` 转发，控制端直接送入深度历史，不重复裁剪、模糊或归一化。仿真旧协议与原预处理保留。
+- 按上游公式 `int(60/50*5)=6` 换算历史索引，使用60项缓冲，并在50Hz策略更新时取距最新项42/36/30/24/18/12/6/0项（8帧）。本体观测与模型权重未修改。
+- 相机网页左侧显示完整原始深度，右侧放大显示实际32×18策略深度；视场经过裁剪，不是逐像素对应的全画幅降噪对比。RealSense空间/时间滤波不叠加到此策略路径。
+- 独立相机进程、本机UDP和持续保留最新帧的接收线程继续使用；未改为ROS或上游共享内存。时间戳映射与硬件数据时效保护保留。
+- 模型训练参数仍来自现有源码重建配置，尚无原始训练运行 YAML；处理算法通过固定版本上游函数逐像素比对，不等同于已证明训练配置完全相同或完成实机运动验收。
+
+默认启动仍为 `./g1 parkour real eth0`，自动启动深度相机且保持空跑。已有旧相机服务需先退出，避免复用旧分辨率或旧协议。
+
+验证：14项Python测试、3项C++测试通过；仅相机采集连续检查测得59.70Hz，717帧的传输年龄0.76–32.76ms，无超时。没有启动运控或发布电机命令。
+
 ## 编译与安装
 
 与主程序相同：使用与目标 CPU 匹配的 Unitree SDK2、ONNX Runtime、Boost 和 yaml-cpp。ARM64 机器人必须使用 aarch64 库。
@@ -12,7 +29,6 @@ MuJoCo 仿真器、XML、网格仍放在外部仓库，不内置本仓库；所�
 cmake -S . -B build -DONNXRUNTIME_ROOT=/path/to/native/onnxruntime \
   -DCMAKE_INSTALL_PREFIX="$PWD/install"
 cmake --build build -j4
-ctest --test-dir build --output-on-failure
 cmake --install build
 bash scripts/parkour.sh check
 ```
@@ -66,6 +82,15 @@ bash scripts/parkour.sh sim --domain 1 --port 17200
 `w/s` 前向速度±0.1 m/s，`q/e` 转向±0.1 rad/s，`x` 清零，空格/Ctrl+C 停止。
 仿真 F710 可添加 `--joystick /dev/input/js0`，映射沿用原程序。
 仿真域必须为正数；本程序始终将 UDP 绑定到回环地址。
+
+
+## 实机单命令启动（自动相机）
+
+在安装目录执行 `./g1 parkour real eth0`，入口会先启动 RealSense 网页服务和本机 UDP 17201 深度转发，等新帧就绪后再启动 Parkour。启动后仍为空跑，真实输出仍须 `--hardware-calibrated` 和 Start。
+
+相机网页为 `http://机器人当前IP:8766/`。自动启动的相机日志保存在 `install/logs/parkour-camera.log`；运控退出或 Ctrl+C 时停止本次启动的相机。已有匹配 UDP 端口的真实相机服务会被复用，退出时保留；已有服务未转发深度时会明确报错，不会抢占设备。
+
+`--port 17202` 会同时修改运控与相机的深度 UDP 端口；`--camera-web-port 8767` 修改自动相机网页端口。需要手动管理相机时使用 `./g1 parkour real eth0 --no-auto-camera`，下文的相机独立启动方式仍可使用。仿真与离线检查入口不会自动启动相机。
 
 ## 实机：RealSense + LowState + torso IMU
 
@@ -126,15 +151,9 @@ RealSense 用其实际内参映射训练89.51°×58.29°视场，保持光轴Z�
 相机采集/网页运行在独立进程；C++推理与控制发布仍在同一控制线程，不是硬实时控制或独立硬件看门狗。
 模型参数由源仓库从训练源码重建，缺少原训练运行的完整参数快照。集成通过不代表实机稳定跑酷；当前没有相机或机器人现场验收。
 
-## 验证命令与本次结果
+## 历史验证结果
 
-```bash
-ctest --test-dir build --output-on-failure
-python3 -m unittest discover -s camera/tests -v
-python tests/g1_parkour_mujoco_smoke.py --mujoco-root /path/to/unitree_mujoco
-python tests/g1_parkour_mujoco_smoke.py --mujoco-root /path/to/unitree_mujoco --stale
-python tests/g1_parkour_mujoco_smoke.py --mujoco-root /path/to/unitree_mujoco --ground --stand-seconds 5
-```
+以下为移除自动化测试前的验证记录。当前模型离线检查使用 `bash scripts/parkour.sh check`；仿真手动操作见上文。
 
 本次 x86_64 开发机验证：6 项 C++ 检查、3 项相机网页/深度协议检查、原有3项关节网页检查通过；
 MuJoCo 完成复位、策略重入、停止清零、观测超时停止。短时零命令落地站立检查通过，约4.75秒仿真时间、

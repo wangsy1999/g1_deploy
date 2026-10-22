@@ -120,7 +120,10 @@ int main(int argc,char** argv) {
         if(!joystick.empty()) gamepad=std::make_unique<g1_gamepad::Device>(joystick);
         g1_unitree_remote::Input remote;
         auto* input=hardware?&remote.state:gamepad?&gamepad->state:nullptr;
-        g1_parkour::UdpInput udp(port);
+        std::unique_ptr<g1_parkour::UdpInput> udp;
+        std::unique_ptr<g1_parkour::DepthReceiver> camera;
+        if(hardware) camera=std::make_unique<g1_parkour::DepthReceiver>(port);
+        else udp=std::make_unique<g1_parkour::UdpInput>(port);
         unitree::robot::ChannelFactory::Instance()->Init(domain,interface);
         // All captured storage outlives the subscribers. Receive callbacks only cache.
         std::mutex mutex; State state{}; Imu torso{};
@@ -189,35 +192,47 @@ int main(int argc,char** argv) {
             while(!stopped) {
                 auto now=Clock::now();
                 State snapshot;Imu imu;bool state_fresh=false,torso_fresh=false;
+                double state_age_ms=-1,torso_age_ms=-1;
                 {
                     std::lock_guard<std::mutex> lock(mutex);snapshot=state;imu=torso;
                     state_fresh=have_state && now-state_at<std::chrono::milliseconds(hardware?int(limits->timeout_ms):500);
                     torso_fresh=have_torso && now-torso_at<std::chrono::milliseconds(100);
+                    if(have_state) state_age_ms=std::chrono::duration<double,std::milli>(now-state_at).count();
+                    if(have_torso) torso_age_ms=std::chrono::duration<double,std::milli>(now-torso_at).count();
                 }
                 bool fresh=false;
-                udp.Latest([&](const unsigned char* packet,std::size_t size) {
-                    if(hardware) {
-                        auto value=g1_parkour::DecodeDepth(packet,size);
-                        if(have_obs && (value.sequence<=last_sequence||value.captured_at<=last_time))
-                            throw std::runtime_error("RealSense stream restarted or replayed; restart controller");
+                if(hardware) {
+                    camera->Latest([&](const g1_parkour::DepthFrame& value,Clock::time_point received) {
                         depth=value;last_sequence=value.sequence;last_time=value.captured_at;
-                    } else {
+                        have_obs=true;obs_at=received;fresh=true;
+                    });
+                } else {
+                    udp->Latest([&](const unsigned char* packet,std::size_t size) {
                         auto value=g1_parkour::Decode(packet,size,policy.signature);
                         if(have_obs && (value.sequence<=last_sequence||value.time<=last_time))
                             throw std::runtime_error("Simulator reset/replayed; restart controller");
                         if(running && have_obs && value.time-last_time>.05)
                             throw std::runtime_error("Observation frames dropped; history timing invalid");
                         obs=value;last_sequence=value.sequence;last_time=value.time;
-                    }
-                    have_obs=true;obs_at=now;fresh=true;
-                });
+                        have_obs=true;obs_at=now;fresh=true;
+                    });
+                }
                 bool ready=state_fresh && have_obs && now-obs_at<std::chrono::milliseconds(150);
                 if(hardware) {
                     const double age=std::chrono::duration<double>(now.time_since_epoch()).count()-depth.captured_at;
                     ready=ready && torso_fresh && age>=-.05 && age<.15;
                 }
-                if(!ready && (active||powered)) throw std::runtime_error("Camera observations or DDS state stale; stopping");
-                if(!ready && now-waiting>std::chrono::seconds(10)) throw std::runtime_error("No fresh camera/LowState/torso IMU; check source and port");
+                auto stale_detail=[&]() {
+                    const double capture_age=have_obs ?
+                        (hardware ? (std::chrono::duration<double>(now.time_since_epoch()).count()-depth.captured_at)*1000 :
+                         std::chrono::duration<double,std::milli>(now-obs_at).count()) : -1;
+                    return " camera_capture_age_ms="+std::to_string(capture_age)+
+                        " camera_receive_age_ms="+std::to_string(have_obs ? std::chrono::duration<double,std::milli>(now-obs_at).count() : -1)+
+                        " lowstate_age_ms="+std::to_string(state_age_ms)+
+                        " torso_imu_age_ms="+std::to_string(torso_age_ms);
+                };
+                if(!ready && (active||powered)) throw std::runtime_error("Camera observations or DDS state stale; stopping;"+stale_detail());
+                if(!ready && now-waiting>std::chrono::seconds(10)) throw std::runtime_error("No fresh camera/LowState/torso IMU;"+stale_detail());
                 if(!ready) {std::this_thread::sleep_for(std::chrono::milliseconds(2));continue;}
                 waiting=now;
                 if(hardware) {

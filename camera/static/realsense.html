@@ -1,9 +1,17 @@
 <!doctype html>
 <html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>G1 · RealSense 相机测试</title>
-<style>body{margin:0;background:#101820;color:#e8eef2;font:16px system-ui;padding:24px}h1{font-size:24px}main{display:flex;flex-wrap:wrap;gap:20px}figure{margin:0;flex:1;min-width:280px}img{width:100%;background:#182632;border-radius:12px}figcaption{margin:10px 0;color:#a8bccb}pre{white-space:pre-wrap;background:#182632;padding:18px;border-radius:12px}#state{color:#69d6ba}.error{color:#ffad8f!important}</style>
-<h1>RealSense 相机测试</h1><p>只读视频预览 · RGB 与深度各自显示，未做彩色对齐 · 无机器人控制功能</p>
+<title>G1 · 深度后处理对比</title>
+<style>
+body{margin:0;background:#101820;color:#e8eef2;font:16px system-ui;padding:24px;max-width:1500px;margin:auto}h1{font-size:26px}p{line-height:1.7;color:#a8bccb}figure{margin:0}img{display:block;width:100%;background:#182632;border-radius:12px}figcaption{margin:12px 0;color:#a8bccb}.labels{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin:14px 0}.labels strong{display:block;color:#e8eef2;font-size:19px}.labels span{font-size:14px;color:#a8bccb}.rgb{max-width:424px;margin-top:24px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#182632;padding:18px;border-radius:12px}#state{color:#69d6ba}.error{color:#ffad8f!important}.note{border-left:3px solid #69d6ba;padding-left:14px}
+</style>
+<h1>深度后处理 · 实时对比</h1>
 <p id="state">等待相机数据…</p>
-<main><figure><figcaption>RGB</figcaption><img src="/color.mjpg" alt="RGB实时视频"></figure><figure><figcaption>深度伪彩色 · 0–2.5 m（黑色为无效值）</figcaption><img src="/depth.mjpg" alt="深度实时视频"></figure></main>
-<pre id="details"></pre>
-<script>const state=document.getElementById('state'),details=document.getElementById('details');async function refresh(){try{let s=await(await fetch('/api/status',{cache:'no-store'})).json();let ok=s.ready&&s.age_ms<1500;state.textContent=s.error?'相机错误：'+s.error:ok?`在线 · ${s.source} · ${s.name||''} · 序列号 ${s.serial} · 图像年龄 ${s.age_ms} ms`:'相机尚未就绪或数据已过期';state.className=ok?'':'error';details.textContent=JSON.stringify(s,null,2)}catch(e){state.textContent='网页服务连接失败';state.className='error'}}setInterval(refresh,1000);refresh();</script></html>
+<div class="labels"><div><strong>原始深度</strong><span>相机输出 · 无额外滤波</span></div><div><strong>策略深度输入</strong><span>Instinct：缩放 → 裁剪 → 补洞 → 高斯模糊 → 归一化</span></div></div>
+<figure><img src="/depth_compare.mjpg" alt="同一帧深度对比：左侧原始，右侧后处理"><figcaption>同一帧：左为完整原始深度，右为 32×18 模型输入放大显示。右侧经过裁剪，视场不同，不是逐像素对比。</figcaption></figure>
+<p class="note">默认按 Instinct 采集 480×270 / 60 Hz 深度，不启用 RGB。右侧是实际发往策略的预处理结果；不叠加 RealSense 时间、空间滤波。配置参数来自当前模型的重建配置，尚缺原始训练 YAML。</p>
+<figure class="rgb"><figcaption>RGB 默认关闭 · 可选预览不参与策略</figcaption><img src="/color.mjpg" alt="RGB实时视频"></figure>
+<details><summary>相机状态与处理信息</summary><pre id="details"></pre></details>
+<script>
+const state=document.getElementById('state'),details=document.getElementById('details');
+async function refresh(){try{let s=await(await fetch('/api/status',{cache:'no-store'})).json();let ok=s.ready&&s.age_ms<1500;state.textContent=s.error?'相机错误：'+s.error:ok?`在线 · ${s.name||s.source} · 深度 ${s.depth_width||''}×${s.depth_height||''} / ${s.fps} Hz · 有效深度 ${(100*s.valid_depth_fraction).toFixed(1)}% → ${(100*s.processed_valid_depth_fraction).toFixed(1)}%`:'相机尚未就绪或数据已过期';state.className=ok?'':'error';details.textContent=JSON.stringify(s,null,2)}catch(e){state.textContent='网页服务连接失败';state.className='error'}}setInterval(refresh,1000);refresh();
+</script></html>

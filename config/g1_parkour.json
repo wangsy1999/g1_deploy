@@ -250,5 +250,8 @@
     1,
     1,
     1
-  ]
+  ],
+  "camera_depth_fps": 60,
+  "training_camera_fps": 50,
+  "depth_history_skip_frames": 5
 }

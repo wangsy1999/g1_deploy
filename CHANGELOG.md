@@ -1,5 +1,11 @@
 # 改动总结
 
+## 2026-10-22：程序说明与测试清理
+
+- README 补齐各运行程序的功能、依赖、源码/安装包入口、常用参数与操作方法。
+- 移除全部 Python/C++ 自动化测试、算法参考辅助文件、CTest 构建目标及当前使用文档中的测试命令。
+- 保留生产程序的离线模型检查、硬件只读检查和相机合成预览入口。下文测试结果属于历史记录，相关测试文件已移除。
+
 ## 2026-10-19：RealSense 网页测试与独立 Parkour 推理
 
 - 新增 `camera/realsense_web.py` 和网页：PC2 采集 RealSense RGB/米制深度，外部设备通过 MJPEG 查看画面和相机状态；独立运行不发送机器人命令。
@@ -56,7 +62,7 @@
 F710的RB门控及原有按键映射保留。
 
 主要文件：`include/g1_unitree_remote.h`、`include/g1_gamepad.h`、
-`src/main.cpp`、`tests/g1_unitree_remote_test.cpp`。
+`src/main.cpp`（对应测试文件已在后续清理中移除）。
 
 ### 3. 网页监控并入同一仓库
 

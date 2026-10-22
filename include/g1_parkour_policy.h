@@ -21,6 +21,7 @@ struct Observation {
     Joints q{}, dq{}; // policy joint order
     std::array<float,3> omega{}, gravity{};
     float height = 0;
+    bool depth_normalized=false;
     std::array<float,36*64> depth{}; // image-plane metres
 };
 
@@ -32,6 +33,7 @@ class Policy {
     std::deque<Image> images_;
     Joints last_action_{};
     int delay_ = 0;
+    int camera_fps_=60, real_stride_=6;
 
     template<std::size_t N>
     static std::array<float,N> Read(const YAML::Node& node) {
@@ -85,6 +87,12 @@ public:
         sign=Read<29>(cfg["joint_sign"]);
         delay_=cfg["depth_delay_frames"].as<int>();
         dt=cfg["step_dt"].as<double>();
+        camera_fps_=cfg["camera_depth_fps"] ? cfg["camera_depth_fps"].as<int>() : 60;
+        const int train_fps=cfg["training_camera_fps"] ? cfg["training_camera_fps"].as<int>() : 50;
+        const int skip=cfg["depth_history_skip_frames"] ? cfg["depth_history_skip_frames"].as<int>() : 5;
+        if(camera_fps_<=0 || train_fps<=0 || skip<=0) throw std::runtime_error("Invalid camera history configuration");
+        real_stride_=int(double(camera_fps_)/train_fps*skip);
+        if(real_stride_<1 || 7*real_stride_+delay_>=camera_fps_) throw std::runtime_error("Camera history cannot fit eight frames");
         if((delay_!=0 && delay_!=1) || !std::isfinite(dt) || std::abs(dt-.02)>1e-8)
             throw std::runtime_error("Expected 20ms parkour observations and depth delay 0 or 1");
         const std::vector<std::string> dds={
@@ -136,16 +144,23 @@ public:
         for(int i=0;i<3;++i) {frame[i]=obs.omega[i]*.25f;frame[3+i]=obs.gravity[i];frame[6+i]=command[i];}
         for(int i=0;i<29;++i) {frame[9+i]=obs.q[i]-neutral[i];frame[38+i]=obs.dq[i]*.05f;frame[67+i]=last_action_[i];}
         for(float v:frame) if(!std::isfinite(v)) throw std::runtime_error("Non-finite proprioception");
-        const auto image=Preprocess(obs.depth);
+        Image image{};
+        if(obs.depth_normalized) {
+            std::copy_n(obs.depth.begin(),image.size(),image.begin());
+            for(float v:image) if(!std::isfinite(v)||v<0||v>1) throw std::runtime_error("Invalid normalized depth input");
+        } else image=Preprocess(obs.depth);
         if(history_.empty()) history_.assign(8,frame); else {history_.pop_front();history_.push_back(frame);}
-        if(images_.empty()) images_.assign(37,image); else {images_.pop_front();images_.push_back(image);}
+        const int image_count=obs.depth_normalized ? camera_fps_ : 37;
+        if(images_.empty()) images_.assign(image_count,image);
+        else {if(int(images_.size())!=image_count) throw std::runtime_error("Depth preprocessing changed; restart policy");images_.pop_front();images_.push_back(image);}
         std::vector<float> proprio, depth;
         proprio.reserve(768); depth.reserve(8*18*32);
         const std::array<int,6> starts{0,3,6,9,38,67}, sizes{3,3,3,29,29,29};
         for(int term=0;term<6;++term) for(const auto& f:history_)
             proprio.insert(proprio.end(),f.begin()+starts[term],f.begin()+starts[term]+sizes[term]);
-        for(int offset=35;offset>=0;offset-=5) {
-            const auto& im=images_[36-delay_-offset]; depth.insert(depth.end(),im.begin(),im.end());
+        const int stride=obs.depth_normalized ? real_stride_ : 5;
+        for(int offset=7*stride;offset>=0;offset-=stride) {
+            const auto& im=images_[images_.size()-1-delay_-offset]; depth.insert(depth.end(),im.begin(),im.end());
         }
         return {proprio,depth};
     }

@@ -6,26 +6,34 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <cerrno>
+#include <atomic>
+#include <chrono>
+#include <exception>
+#include <mutex>
+#include <thread>
 
 namespace g1_parkour {
 struct DepthFrame {
     uint64_t sequence = 0;
+    bool normalized=false;
     double captured_at = 0; // CLOCK_MONOTONIC, same Linux host as the controller
     std::array<float,36*64> image{};
 };
 inline DepthFrame DecodeDepth(const unsigned char* bytes, std::size_t size) {
-    if (size != 32+36*64*4 || std::memcmp(bytes,"G1DEP001",8))
+    const bool normalized=size==32+18*32*4 && !std::memcmp(bytes,"G1DEP002",8);
+    if (!normalized && (size != 32+36*64*4 || std::memcmp(bytes,"G1DEP001",8)))
         throw std::runtime_error("Invalid RealSense depth packet");
     DepthFrame frame;
     uint32_t width=0,height=0;
     std::memcpy(&frame.sequence,bytes+8,8);
     std::memcpy(&frame.captured_at,bytes+16,8);
     std::memcpy(&width,bytes+24,4); std::memcpy(&height,bytes+28,4);
-    if (width!=64 || height!=36 || !std::isfinite(frame.captured_at))
+    frame.normalized=normalized;
+    if (width!=(normalized?32:64) || height!=(normalized?18:36) || !std::isfinite(frame.captured_at))
         throw std::runtime_error("RealSense dimensions/timestamp mismatch");
-    std::memcpy(frame.image.data(),bytes+32,frame.image.size()*4);
+    std::memcpy(frame.image.data(),bytes+32,(normalized?18*32:36*64)*4);
     for (float d : frame.image)
-        if (std::isnan(d) || d<0) throw std::runtime_error("Invalid RealSense depth");
+        if (std::isnan(d) || d<0 || (normalized && (!std::isfinite(d)||d>1))) throw std::runtime_error("Invalid RealSense depth");
     return frame;
 }
 
@@ -60,11 +68,58 @@ public:
     }
 };
 
+
+// Continuously drain UDP even while the control thread performs service handover.
+// Only the newest decoded frame is retained, together with its actual receive time.
+class DepthReceiver {
+    UdpInput input_;
+    std::atomic<bool> running_{true};
+    std::mutex mutex_;
+    DepthFrame latest_{};
+    std::chrono::steady_clock::time_point received_{};
+    bool have_=false,pending_=false;
+    std::exception_ptr error_;
+    std::thread worker_;
+public:
+    explicit DepthReceiver(int port):input_(port),worker_([this] {
+        try {
+            while(running_) {
+                input_.Latest([this](const unsigned char* bytes,std::size_t size) {
+                    auto frame=DecodeDepth(bytes,size);
+                    auto received=std::chrono::steady_clock::now();
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    if(have_ && (frame.sequence<=latest_.sequence || frame.captured_at<=latest_.captured_at))
+                        throw std::runtime_error("RealSense stream restarted or replayed; restart controller");
+                    latest_=frame;received_=received;have_=pending_=true;
+                });
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        } catch(...) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            error_=std::current_exception();running_=false;
+        }
+    }) {}
+    ~DepthReceiver() {running_=false;if(worker_.joinable()) worker_.join();}
+    DepthReceiver(const DepthReceiver&)=delete;
+    DepthReceiver& operator=(const DepthReceiver&)=delete;
+    template<class Consume> bool Latest(Consume consume) {
+        DepthFrame frame;std::chrono::steady_clock::time_point received;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if(error_) std::rethrow_exception(error_);
+            if(!pending_) return false;
+            frame=latest_;received=received_;pending_=false;
+        }
+        consume(frame,received);return true;
+    }
+};
+
 // The policy root is torso. LowState's pelvis IMU is deliberately not used here.
 inline Observation HardwareObservation(const Policy& policy,
     const unitree_hg::msg::dds_::LowState_& state,
     const unitree_hg::msg::dds_::IMUState_& torso, const DepthFrame& depth) {
     Observation obs;
+    obs.depth_normalized=depth.normalized;
     obs.depth=depth.image; obs.sequence=depth.sequence; obs.time=depth.captured_at;
     for(int i=0;i<29;++i) {
         obs.q[i]=policy.sign[i]*state.motor_state()[policy.ids[i]].q();
