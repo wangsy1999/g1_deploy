@@ -4,6 +4,9 @@ No DDS imports, robot commands, Torch or GUI dependencies. --mock is explicitly
 synthetic and intended for HTTP/protocol checks without a connected camera.
 """
 import argparse
+import fcntl
+import mmap
+import os
 import json
 import math
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -20,6 +23,7 @@ import numpy as np
 
 HEADER = struct.Struct("<8sQdII")
 ROOT = Path(__file__).resolve().parents[1]
+CAPTURE_FREQUENCY_CHECK_INTERVAL = 500
 
 
 class FrameClock:
@@ -106,6 +110,42 @@ def depth_packet(image, sequence, captured_at, normalized=False):
     return HEADER.pack(b"G1DEP001", sequence, captured_at, 64, 36) + image.astype("<f4").tobytes()
 
 
+class RawDepthFeed:
+    """Latest raw depth in local shared memory; UDP carries only notifications."""
+    def __init__(self, port, width, height):
+        if (width, height) != (480, 270):
+            raise ValueError("Raw policy feed requires 480x270 depth")
+        self.path = Path(f"/dev/shm/g1-depth-{os.getuid()}-{port}")
+        self.owner = os.fdopen(os.open(self.path.with_suffix('.owner'), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600), 'r+b')
+        try:
+            fcntl.flock(self.owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            self.owner.close()
+            raise RuntimeError(f"Another camera owns depth port {port}")
+        self.file = os.fdopen(os.open(self.path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600), 'r+b')
+        self.file.truncate(HEADER.size + width*height*4)
+        self.memory = mmap.mmap(self.file.fileno(), 0)
+
+    def publish(self, depth, sequence, captured_at):
+        header = HEADER.pack(b"G1DEP003", sequence, captured_at, 480, 270)
+        try:
+            fcntl.flock(self.file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return None
+        try:
+            self.memory[HEADER.size:] = depth.astype('<f4', copy=False).tobytes()
+            self.memory[:HEADER.size] = header
+        finally:
+            fcntl.flock(self.file, fcntl.LOCK_UN)
+        return header
+
+    def close(self):
+        self.memory.close()
+        self.file.close()
+        self.path.unlink(missing_ok=True)
+        self.owner.close()
+
+
 class Frames:
     def __init__(self, token=""):
         self.changed = threading.Condition()
@@ -119,8 +159,13 @@ class Frames:
         with self.changed:
             self.color, self.depth, self.comparison = color, depth, comparison
             self.sequence += 1
-            self.status = {**status, "ready": True, "error": None, "updated_at": time.monotonic()}
+            self.status = {**self.status, **status}
             self.changed.notify_all()
+
+    def captured(self, status):
+        with self.changed:
+            self.status = {**self.status, **status, "ready": True, "error": None,
+                           "updated_at": time.monotonic()}
 
     def fail(self, error):
         with self.changed:
@@ -133,6 +178,63 @@ def jpeg(image):
     if not ok:
         raise RuntimeError("JPEG encoding failed")
     return encoded.tobytes()
+
+
+class PreviewWorker:
+    """One replaceable pending frame; encoding never holds the capture thread."""
+    def __init__(self, args, frames, render_depth):
+        self.args, self.frames, self.render_depth = args, frames, render_depth
+        self.changed = threading.Condition()
+        self.pending = None
+        self.closed = threading.Event()
+        self.worker = threading.Thread(target=self.run, name="camera-preview", daemon=True)
+        self.worker.start()
+
+    def submit(self, depth, color, depth_frame, captured_at):
+        # Arrays are owned by capture and never mutated after submission. Keep
+        # the SDK frame alive for legacy preview filtering in the worker.
+        with self.changed:
+            self.pending = (depth, color, depth_frame, captured_at)
+            self.changed.notify()
+
+    def close(self):
+        self.closed.set()
+        with self.changed:
+            self.pending = None
+            self.changed.notify_all()
+        self.worker.join(timeout=2)
+
+    def run(self):
+        next_at = 0.
+        while not self.closed.is_set():
+            with self.changed:
+                self.changed.wait_for(lambda: self.pending is not None or self.closed.is_set())
+            if self.closed.wait(max(0., next_at-time.monotonic())):
+                return
+            with self.changed:
+                if self.closed.is_set():
+                    return
+                depth, color, depth_frame, captured_at = self.pending
+                self.pending = None
+            next_at = time.monotonic() + 1/self.args.preview_fps
+            try:
+                processed_depth = self.render_depth(depth, depth_frame)
+                processed_visual = cv2.applyColorMap(
+                    (np.clip(processed_depth, 0, 2.5)/2.5*255).astype(np.uint8), cv2.COLORMAP_TURBO)
+                processed_visual[processed_depth <= 0] = 0
+                visual = cv2.applyColorMap(
+                    (np.clip(depth, 0, 2.5)/2.5*255).astype(np.uint8), cv2.COLORMAP_TURBO)
+                visual[depth <= 0] = 0
+                self.frames.update(jpeg(color), jpeg(visual), {
+                    "preview_capture_time_monotonic": captured_at,
+                    "preview_error": None,
+                    "valid_depth_fraction": float(np.mean(np.isfinite(depth) & (depth > 0))),
+                    "processed_valid_depth_fraction": float(np.mean(np.isfinite(processed_depth) & (processed_depth > 0)))},
+                    comparison=jpeg(np.concatenate((visual, processed_visual), axis=1)))
+            except Exception as error:
+                # Preview failures must not stop the independent policy feed.
+                with self.frames.changed:
+                    self.frames.status["preview_error"] = str(error)
 
 
 def make_server(frames, host, port):
@@ -182,6 +284,9 @@ def make_server(frames, host, port):
                     captured = status.get("capture_time_monotonic", updated)
                     status["age_ms"] = (None if captured is None else
                                         round((time.monotonic()-captured)*1000, 1))
+                    preview_at = status.get("preview_capture_time_monotonic")
+                    status["preview_age_ms"] = (None if preview_at is None else
+                                                round((time.monotonic()-preview_at)*1000, 1))
                     status["sequence"] = frames.sequence
                 data, mime = json.dumps(status, allow_nan=False).encode(), "application/json"
             elif path == "/":
@@ -205,6 +310,8 @@ def make_server(frames, host, port):
 def capture(args, frames, stopping):
     pipeline = None
     pipeline_started = False
+    preview = None
+    raw_feed = None
     sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) if args.depth_port else None
     if sender:
         sender.setblocking(False)
@@ -246,15 +353,33 @@ def capture(args, frames, stopping):
                     "depth_width": args.width, "depth_height": args.height,
                     "color_width": args.color_width, "color_height": args.color_height,
                     "color_fps": args.color_fps if args.color else 0, "color_enabled": args.color,
-                    "camera_mode": args.camera_mode, "depth_protocol": "G1DEP002" if args.camera_mode=="instinct" else "G1DEP001",
+                    "camera_mode": args.camera_mode, "depth_protocol": "G1DEP003" if args.camera_mode=="instinct" else "G1DEP001",
                     "depth_scale_m": depth_scale, "intrinsics": intrinsics,
                     "distortion_model": str(intr.model)}
             if any(abs(float(v)) > 1e-8 for v in intr.coeffs):
                 raise RuntimeError("Depth stream has nonzero distortion; select a rectified depth profile before policy sampling")
         disabled_color=np.zeros((240,424,3),np.uint8)
         cv2.putText(disabled_color,"RGB disabled (depth only)",(12,120),cv2.FONT_HERSHEY_SIMPLEX,.6,(180,180,180),1)
+        def render_depth(depth, depth_frame):
+            if args.camera_mode == "instinct":
+                return cv2.resize(instinct_depth(depth, profile)*2.5, (args.width, args.height), interpolation=cv2.INTER_NEAREST)
+            if args.mock:
+                return depth
+            filtered = to_disparity.process(depth_frame)
+            filtered = spatial.process(filtered)
+            filtered = temporal.process(filtered)
+            filtered = to_depth.process(filtered)
+            filtered = fill.process(filtered)
+            return np.asanyarray(filtered.get_data()).astype(np.float32)*depth_scale
+
+        if sender and args.camera_mode == "instinct":
+            raw_feed = RawDepthFeed(args.depth_port, args.width, args.height)
+        preview = PreviewWorker(args, frames, render_depth)
         sequence, last_frame = 0, None
         frame_clock = FrameClock()
+        frequency_started_at = None
+        frequency_count = 0
+        capture_fps = None
         while not stopping.is_set():
             before = time.monotonic()
             if args.mock:
@@ -274,48 +399,52 @@ def capture(args, frames, stopping):
                 # Keep ownership independent of SDK frame buffers.
                 depth = np.asanyarray(df.get_data()).astype(np.float32)*depth_scale
                 color = np.asanyarray(cf.get_data()).copy() if args.color else disabled_color
-            if args.camera_mode=="instinct":
-                policy_depth=instinct_depth(depth,profile)
-                coverage=None  # Direct resize, not an intrinsics/FOV remap.
+            # Measure delivered frames with the host clock, excluding startup.
+            if frequency_started_at is None:
+                frequency_started_at = time.monotonic()
             else:
-                policy_depth, coverage = project_depth(depth, intrinsics, profile)
+                frequency_count += 1
+                if frequency_count == CAPTURE_FREQUENCY_CHECK_INTERVAL:
+                    measured_at = time.monotonic()
+                    capture_fps = frequency_count / (measured_at-frequency_started_at)
+                    print(f"Camera capture running at {capture_fps:.4f} Hz.", flush=True)
+                    frequency_count = 0
+                    frequency_started_at = measured_at
+            coverage = None
             if sender:
-                try:
-                    sender.sendto(depth_packet(policy_depth, sequence, captured_at, normalized=args.camera_mode=="instinct"), ("127.0.0.1", args.depth_port))
-                except BlockingIOError:
-                    pass
-            # Preview branch only. The policy projection and UDP packet above use raw depth.
-            if args.camera_mode=="instinct":
-                processed_depth=cv2.resize(policy_depth*2.5,(args.width,args.height),interpolation=cv2.INTER_NEAREST)
-            elif args.mock:
-                processed_depth = depth.copy()
-            else:
-                filtered = to_disparity.process(df)
-                filtered = spatial.process(filtered)
-                filtered = temporal.process(filtered)
-                filtered = to_depth.process(filtered)
-                filtered = fill.process(filtered)
-                processed_depth = np.asanyarray(filtered.get_data()).astype(np.float32)*depth_scale
-            processed_visual = cv2.applyColorMap(
-                (np.clip(processed_depth, 0, 2.5)/2.5*255).astype(np.uint8), cv2.COLORMAP_TURBO)
-            processed_visual[processed_depth <= 0] = 0
+                if raw_feed is not None:
+                    packet = raw_feed.publish(depth, sequence, captured_at)
+                else:
+                    policy_depth, coverage = project_depth(depth, intrinsics, profile)
+                    packet = depth_packet(policy_depth, sequence, captured_at)
+                if packet is not None:
+                    try:
+                        sender.sendto(packet, ("127.0.0.1", args.depth_port))
+                    except BlockingIOError:
+                        pass
             sequence += 1
-            visual = cv2.applyColorMap((np.clip(depth, 0, 2.5)/2.5*255).astype(np.uint8), cv2.COLORMAP_TURBO)
-            visual[depth <= 0] = 0
-            frames.update(jpeg(color), jpeg(visual), {**info, "policy_fov_coverage": coverage,
-                          "capture_time_monotonic": captured_at, "depth_udp_port": args.depth_port,
-                          "valid_depth_fraction": float(np.mean(np.isfinite(depth) & (depth > 0))),
-                          "processed_valid_depth_fraction": float(np.mean(np.isfinite(processed_depth) & (processed_depth > 0))),
-                          "postprocessing_preview": "Instinct model input: nearest resize/crop/inpaint/Gaussian/normalize" if args.camera_mode=="instinct" else "disparity → spatial → temporal → depth → hole filling" if not args.mock else "synthetic; filters bypassed",
-                          "policy_depth_source": "normalized 18x32 Instinct preprocessing" if args.camera_mode=="instinct" else "legacy raw depth",
-                          "camera_mount_verification": "operator confirmed; not measurable by this script"},
-                          comparison=jpeg(np.concatenate((visual, processed_visual), axis=1)))
-            stopping.wait(max(0, 1/args.fps-(time.monotonic()-before)))
+            frames.captured({**info, "policy_fov_coverage": coverage,
+                             "capture_time_monotonic": captured_at,
+                             "depth_udp_port": args.depth_port,
+                             "capture_fps": capture_fps,
+                             "preview_fps": args.preview_fps,
+                          "postprocessing_preview": ("Instinct model input: nearest resize/crop/inpaint/" + ("Gaussian/" if profile["preprocessing"].get("gaussian_kernel") else "") + "normalize") if args.camera_mode=="instinct" else "disparity → spatial → temporal → depth → hole filling" if not args.mock else "synthetic; filters bypassed",
+                          "policy_depth_source": "raw 480x270 shared memory; preprocessing on policy side" if args.camera_mode=="instinct" else "legacy raw depth",
+                          "camera_mount_verification": "operator confirmed; not measurable by this script"})
+            preview.submit(depth, color, df if not args.mock else None, captured_at)
+            # RealSense arrival drives capture, as in instinct_onboard. Only
+            # synthetic frames need software pacing.
+            if args.mock:
+                stopping.wait(max(0, 1/args.fps-(time.monotonic()-before)))
     except Exception as error:
         frames.fail(error)
         print(f"Camera stopped: {error}", flush=True)
         stopping.set()
     finally:
+        if preview is not None:
+            preview.close()
+        if raw_feed is not None:
+            raw_feed.close()
         if pipeline_started:
             pipeline.stop()
         if sender:
@@ -330,6 +459,7 @@ def main():
     parser.add_argument("--width", type=int, default=480)
     parser.add_argument("--height", type=int, default=270)
     parser.add_argument("--fps", type=int, default=60, help="Depth stream FPS")
+    parser.add_argument("--preview-fps", type=int, default=15, help="Maximum web preview FPS; independent of depth feed")
     parser.add_argument("--camera-mode", choices=("instinct","legacy"), default="instinct")
     parser.add_argument("--color", action="store_true", help="Optional RGB preview; disabled for depth-only reference setup")
     parser.add_argument("--color-width", type=int, default=424)
@@ -340,7 +470,7 @@ def main():
     parser.add_argument("--token", default="", help="Optional HTTP Basic password (user: camera)")
     parser.add_argument("--mock", action="store_true")
     args = parser.parse_args()
-    if min(args.fps, args.width, args.height, args.color_fps, args.color_width, args.color_height) <= 0 or not 1 <= args.port <= 65535:
+    if min(args.preview_fps, args.fps, args.width, args.height, args.color_fps, args.color_width, args.color_height) <= 0 or not 1 <= args.port <= 65535:
         parser.error("Invalid size, FPS or HTTP port")
     if args.depth_port and not 1024 <= args.depth_port <= 65535:
         parser.error("Depth UDP port must be 1024..65535")

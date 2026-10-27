@@ -4,6 +4,9 @@
 #include <unitree/idl/hg/IMUState_.hpp>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <sys/file.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <cerrno>
 #include <atomic>
@@ -15,6 +18,7 @@
 namespace g1_parkour {
 struct DepthFrame {
     uint64_t sequence = 0;
+    std::shared_ptr<const std::vector<float>> raw_depth;
     bool normalized=false;
     double captured_at = 0; // CLOCK_MONOTONIC, same Linux host as the controller
     std::array<float,36*64> image{};
@@ -34,6 +38,34 @@ inline DepthFrame DecodeDepth(const unsigned char* bytes, std::size_t size) {
     std::memcpy(frame.image.data(),bytes+32,(normalized?18*32:36*64)*4);
     for (float d : frame.image)
         if (std::isnan(d) || d<0 || (normalized && (!std::isfinite(d)||d>1))) throw std::runtime_error("Invalid RealSense depth");
+    return frame;
+}
+
+inline DepthFrame ReadRawDepth(int fd,const unsigned char* bytes,std::size_t size) {
+    if(size!=32 || std::memcmp(bytes,"G1DEP003",8)) throw std::runtime_error("Invalid raw depth notification");
+    uint32_t width=0,height=0;
+    std::memcpy(&width,bytes+24,4);std::memcpy(&height,bytes+28,4);
+    if(width!=480||height!=270) throw std::runtime_error("Invalid raw depth dimensions");
+    DepthFrame frame;
+    std::memcpy(&frame.sequence,bytes+8,8);std::memcpy(&frame.captured_at,bytes+16,8);
+    if(!std::isfinite(frame.captured_at)) throw std::runtime_error("Invalid raw depth timestamp");
+    auto raw=std::make_shared<std::vector<float>>(480*270);
+    if(flock(fd,LOCK_SH|LOCK_NB)) {
+        if(errno==EWOULDBLOCK) return frame;
+        throw std::runtime_error("Cannot lock raw depth shared memory");
+    }
+    // Allocation precedes the lock so capture only competes with the copy.
+    std::array<unsigned char,32> header{};
+    const auto header_size=pread(fd,header.data(),header.size(),0);
+    const auto data_size=pread(fd,raw->data(),raw->size()*sizeof(float),32);
+    flock(fd,LOCK_UN);
+    if(header_size!=32 || data_size!=static_cast<ssize_t>(raw->size()*sizeof(float)))
+        throw std::runtime_error("Incomplete raw depth shared memory");
+    // A newer frame may already have replaced this notification's image.
+    // Wait for its own notification rather than mixing timestamps/images.
+    if(std::memcmp(header.data(),bytes,32)) return frame;
+    for(float d:*raw) if(!std::isfinite(d)||d<0) throw std::runtime_error("Invalid raw depth");
+    frame.raw_depth=raw;
     return frame;
 }
 
@@ -73,6 +105,7 @@ public:
 // Only the newest decoded frame is retained, together with its actual receive time.
 class DepthReceiver {
     UdpInput input_;
+    int raw_fd_=-1;
     std::atomic<bool> running_{true};
     std::mutex mutex_;
     DepthFrame latest_{};
@@ -81,11 +114,18 @@ class DepthReceiver {
     std::exception_ptr error_;
     std::thread worker_;
 public:
-    explicit DepthReceiver(int port):input_(port),worker_([this] {
+    explicit DepthReceiver(int port):input_(port) {
+        const auto path="/dev/shm/g1-depth-"+std::to_string(getuid())+"-"+std::to_string(port);
+        raw_fd_=open(path.c_str(),O_RDONLY|O_CLOEXEC|O_NOFOLLOW);
+        // Legacy UDP sources do not need shared memory.
+        worker_=std::thread([this] {
         try {
             while(running_) {
                 input_.Latest([this](const unsigned char* bytes,std::size_t size) {
-                    auto frame=DecodeDepth(bytes,size);
+                    const bool raw=size>=8 && !std::memcmp(bytes,"G1DEP003",8);
+                    if(raw && raw_fd_<0) throw std::runtime_error("Raw depth shared memory unavailable; start camera first");
+                    auto frame=raw ? ReadRawDepth(raw_fd_,bytes,size) : DecodeDepth(bytes,size);
+                    if(raw && !frame.raw_depth) return;
                     auto received=std::chrono::steady_clock::now();
                     std::lock_guard<std::mutex> lock(mutex_);
                     if(have_ && (frame.sequence<=latest_.sequence || frame.captured_at<=latest_.captured_at))
@@ -98,8 +138,9 @@ public:
             std::lock_guard<std::mutex> lock(mutex_);
             error_=std::current_exception();running_=false;
         }
-    }) {}
-    ~DepthReceiver() {running_=false;if(worker_.joinable()) worker_.join();}
+        });
+    }
+    ~DepthReceiver() {running_=false;if(worker_.joinable()) worker_.join();if(raw_fd_>=0) close(raw_fd_);}
     DepthReceiver(const DepthReceiver&)=delete;
     DepthReceiver& operator=(const DepthReceiver&)=delete;
     template<class Consume> bool Latest(Consume consume) {
@@ -119,6 +160,7 @@ inline Observation HardwareObservation(const Policy& policy,
     const unitree_hg::msg::dds_::LowState_& state,
     const unitree_hg::msg::dds_::IMUState_& torso, const DepthFrame& depth) {
     Observation obs;
+    obs.raw_depth=depth.raw_depth;
     obs.depth_normalized=depth.normalized;
     obs.depth=depth.image; obs.sequence=depth.sequence; obs.time=depth.captured_at;
     for(int i=0;i<29;++i) {

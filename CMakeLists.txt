@@ -25,6 +25,7 @@ endif()
 get_filename_component(SDK_RUNTIME_DIR "${SDK_LIBRARY}" DIRECTORY)
 find_package(Boost REQUIRED)
 find_package(yaml-cpp REQUIRED)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc photo)
 find_path(ORT_INCLUDE onnxruntime_cxx_api.h PATHS "${ONNXRUNTIME_ROOT}/include" NO_DEFAULT_PATH)
 find_library(ORT_LIBRARY NAMES onnxruntime libonnxruntime.so.1 PATHS "${ONNXRUNTIME_ROOT}/lib" NO_DEFAULT_PATH)
 if(NOT ORT_INCLUDE OR NOT ORT_LIBRARY)
@@ -38,8 +39,8 @@ target_compile_definitions(g1_dwaq PRIVATE G1_WITH_POLICY
     G1_POLICY_DEFAULT_CONFIG="${REPOSITORY_ROOT}/config/g1_locomotion.yaml"
     G1_POLICY_DEFAULT_MODEL="${REPOSITORY_ROOT}/models/policy.onnx")
 add_executable(g1_parkour "${REPOSITORY_ROOT}/src/parkour.cpp")
-target_include_directories(g1_parkour PRIVATE "${CONTROL_SOURCE}" "${ORT_INCLUDE}")
-target_link_libraries(g1_parkour PRIVATE unitree_sdk2 Boost::boost yaml-cpp "${ORT_LIBRARY}")
+target_include_directories(g1_parkour PRIVATE "${CONTROL_SOURCE}" "${ORT_INCLUDE}" ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(g1_parkour PRIVATE unitree_sdk2 Boost::boost yaml-cpp "${ORT_LIBRARY}" ${OpenCV_LIBS})
 target_compile_definitions(g1_parkour PRIVATE
     G1_PARKOUR_DEFAULT_MODELS="${REPOSITORY_ROOT}/models/parkour"
     G1_PARKOUR_DEFAULT_CONFIG="${REPOSITORY_ROOT}/config/g1_parkour.json"

@@ -52,7 +52,7 @@ def main():
                 raise RuntimeError(
                     f'Existing camera does not forward real depth to UDP {args.depth_port}. '
                     f'Stop it, then rerun Parkour, or restart it with --depth-port {args.depth_port}.')
-            if value.get('camera_mode')!='instinct' or value.get('depth_protocol')!='G1DEP002' or value.get('fps')!=60 or (value.get('depth_width'),value.get('depth_height'))!=(480,270) or value.get('color_enabled'):
+            if value.get('camera_mode')!='instinct' or value.get('depth_protocol')!='G1DEP003' or value.get('fps')!=60 or (value.get('depth_width'),value.get('depth_height'))!=(480,270) or value.get('color_enabled'):
                 raise RuntimeError('Existing camera is not the Instinct 480x270/60 depth-only setup; stop it and rerun Parkour')
             return True
         return False

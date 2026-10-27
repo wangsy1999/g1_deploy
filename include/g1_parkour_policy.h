@@ -1,5 +1,9 @@
 #pragma once
 #include <onnxruntime_cxx_api.h>
+#include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
+#include <opencv2/photo.hpp>
+#include <filesystem>
 #include <yaml-cpp/yaml.h>
 #include <algorithm>
 #include <array>
@@ -21,6 +25,7 @@ struct Observation {
     Joints q{}, dq{}; // policy joint order
     std::array<float,3> omega{}, gravity{};
     float height = 0;
+    std::shared_ptr<const std::vector<float>> raw_depth;
     bool depth_normalized=false;
     std::array<float,36*64> depth{}; // image-plane metres
 };
@@ -34,6 +39,7 @@ class Policy {
     Joints last_action_{};
     int delay_ = 0;
     int camera_fps_=60, real_stride_=6;
+    YAML::Node raw_profile_;
 
     template<std::size_t N>
     static std::array<float,N> Read(const YAML::Node& node) {
@@ -82,6 +88,8 @@ public:
 
     Policy(const std::string& models, const std::string& config) {
         const auto cfg=YAML::LoadFile(config);
+        const auto camera_config=std::filesystem::path(config).parent_path()/"realsense_parkour.json";
+        if(std::filesystem::exists(camera_config)) raw_profile_=YAML::LoadFile(camera_config.string())["preprocessing"];
         neutral=Read<29>(cfg["default_joint_pos"]);
         kp=Read<29>(cfg["kp"]); kd=Read<29>(cfg["kd"]); scale=Read<29>(cfg["action_scale"]);
         sign=Read<29>(cfg["joint_sign"]);
@@ -138,6 +146,39 @@ public:
         }
         return image;
     }
+    Image PreprocessRaw(const std::vector<float>& depth) const {
+        if(depth.size()!=480*270 || !raw_profile_.IsMap())
+            throw std::runtime_error("Raw depth requires 480x270 and sibling realsense_parkour.json");
+        for(float d:depth) if(!std::isfinite(d)||d<0) throw std::runtime_error("Invalid raw depth");
+        const auto p=raw_profile_;
+        cv::Mat source(270,480,CV_32FC1,const_cast<float*>(depth.data())), image;
+        cv::resize(source,image,cv::Size(p["resize"][0].as<int>(),p["resize"][1].as<int>()),0,0,cv::INTER_NEAREST);
+        const auto crop=Read<4>(p["crop"]);
+        const int top=crop[0],bottom=crop[1],left=crop[2],right=crop[3];
+        if(top<0||bottom<0||left<0||right<0||top+bottom>=image.rows||left+right>=image.cols)
+            throw std::runtime_error("Invalid raw depth crop");
+        image=image(cv::Rect(left,top,image.cols-left-right,image.rows-top-bottom)).clone();
+        cv::Mat filled;
+        cv::inpaint(image,image<p["inpaint_below_m"].as<float>(),filled,p["inpaint_radius"].as<double>(),cv::INPAINT_NS);
+        image=filled;
+        if(p["blind_spot_crop"]) {
+            const auto blind=Read<4>(p["blind_spot_crop"]);
+            for(int y=0;y<image.rows;++y) for(int x=0;x<image.cols;++x)
+                if(y<blind[0]||y>=image.rows-blind[1]||x<blind[2]||x>=image.cols-blind[3]) image.at<float>(y,x)=0;
+        }
+        const int kernel=p["gaussian_kernel"] ? p["gaussian_kernel"].as<int>() : 0;
+        if(kernel) cv::GaussianBlur(image,image,cv::Size(kernel,kernel),p["gaussian_sigma"].as<double>(),p["gaussian_sigma"].as<double>());
+        if(image.rows!=18||image.cols!=32) throw std::runtime_error("Model requires 18x32 depth");
+        const auto range=Read<2>(p["depth_range"]), output=Read<2>(p["output_range"]);
+        if(range[1]<=range[0]||output[0]!=0||output[1]!=1) throw std::runtime_error("Invalid raw depth normalization");
+        Image result{};
+        for(int y=0;y<18;++y) for(int x=0;x<32;++x) {
+            const float v=(std::clamp(image.at<float>(y,x),range[0],range[1])-range[0])/(range[1]-range[0]);
+            if(!std::isfinite(v)) throw std::runtime_error("Non-finite processed depth");
+            result[y*32+x]=v;
+        }
+        return result;
+    }
     std::pair<std::vector<float>,std::vector<float>> Observe(const Observation& obs,
                                                            const std::array<float,3>& command) {
         std::array<float,96> frame{};
@@ -145,12 +186,14 @@ public:
         for(int i=0;i<29;++i) {frame[9+i]=obs.q[i]-neutral[i];frame[38+i]=obs.dq[i]*.05f;frame[67+i]=last_action_[i];}
         for(float v:frame) if(!std::isfinite(v)) throw std::runtime_error("Non-finite proprioception");
         Image image{};
-        if(obs.depth_normalized) {
+        const bool instinct=obs.depth_normalized || bool(obs.raw_depth);
+        if(obs.raw_depth) image=PreprocessRaw(*obs.raw_depth);
+        else if(obs.depth_normalized) {
             std::copy_n(obs.depth.begin(),image.size(),image.begin());
             for(float v:image) if(!std::isfinite(v)||v<0||v>1) throw std::runtime_error("Invalid normalized depth input");
         } else image=Preprocess(obs.depth);
         if(history_.empty()) history_.assign(8,frame); else {history_.pop_front();history_.push_back(frame);}
-        const int image_count=obs.depth_normalized ? camera_fps_ : 37;
+        const int image_count=instinct ? camera_fps_ : 37;
         if(images_.empty()) images_.assign(image_count,image);
         else {if(int(images_.size())!=image_count) throw std::runtime_error("Depth preprocessing changed; restart policy");images_.pop_front();images_.push_back(image);}
         std::vector<float> proprio, depth;
@@ -158,7 +201,7 @@ public:
         const std::array<int,6> starts{0,3,6,9,38,67}, sizes{3,3,3,29,29,29};
         for(int term=0;term<6;++term) for(const auto& f:history_)
             proprio.insert(proprio.end(),f.begin()+starts[term],f.begin()+starts[term]+sizes[term]);
-        const int stride=obs.depth_normalized ? real_stride_ : 5;
+        const int stride=instinct ? real_stride_ : 5;
         for(int offset=7*stride;offset>=0;offset-=stride) {
             const auto& im=images_[images_.size()-1-delay_-offset]; depth.insert(depth.end(),im.begin(),im.end());
         }

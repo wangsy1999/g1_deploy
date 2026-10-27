@@ -6,12 +6,12 @@ body{margin:0;background:#101820;color:#e8eef2;font:16px system-ui;padding:24px;
 </style>
 <h1>深度后处理 · 实时对比</h1>
 <p id="state">等待相机数据…</p>
-<div class="labels"><div><strong>原始深度</strong><span>相机输出 · 无额外滤波</span></div><div><strong>策略深度输入</strong><span>Instinct：缩放 → 裁剪 → 补洞 → 高斯模糊 → 归一化</span></div></div>
+<div class="labels"><div><strong>原始深度</strong><span>相机输出 · 无额外滤波</span></div><div><strong>策略深度输入</strong><span>Instinct：缩放 → 裁剪 → 补洞 → 归一化（高斯模糊已关闭）</span></div></div>
 <figure><img src="/depth_compare.mjpg" alt="同一帧深度对比：左侧原始，右侧后处理"><figcaption>同一帧：左为完整原始深度，右为 32×18 模型输入放大显示。右侧经过裁剪，视场不同，不是逐像素对比。</figcaption></figure>
-<p class="note">默认按 Instinct 采集 480×270 / 60 Hz 深度，不启用 RGB。右侧是实际发往策略的预处理结果；不叠加 RealSense 时间、空间滤波。配置参数来自当前模型的重建配置，尚缺原始训练 YAML。</p>
+<p class="note">默认按 Instinct 采集 480×270 / 60 Hz 深度，不启用 RGB。网页在独立线程中默认最高 15 Hz 更新，只显示最新帧。原始深度交给策略侧后处理，右侧由预览线程按相同配置独立生成；不叠加 RealSense 时间、空间滤波。配置参数来自当前模型的重建配置，尚缺原始训练 YAML。</p>
 <figure class="rgb"><figcaption>RGB 默认关闭 · 可选预览不参与策略</figcaption><img src="/color.mjpg" alt="RGB实时视频"></figure>
 <details><summary>相机状态与处理信息</summary><pre id="details"></pre></details>
 <script>
 const state=document.getElementById('state'),details=document.getElementById('details');
-async function refresh(){try{let s=await(await fetch('/api/status',{cache:'no-store'})).json();let ok=s.ready&&s.age_ms<1500;state.textContent=s.error?'相机错误：'+s.error:ok?`在线 · ${s.name||s.source} · 深度 ${s.depth_width||''}×${s.depth_height||''} / ${s.fps} Hz · 有效深度 ${(100*s.valid_depth_fraction).toFixed(1)}% → ${(100*s.processed_valid_depth_fraction).toFixed(1)}%`:'相机尚未就绪或数据已过期';state.className=ok?'':'error';details.textContent=JSON.stringify(s,null,2)}catch(e){state.textContent='网页服务连接失败';state.className='error'}}setInterval(refresh,1000);refresh();
+async function refresh(){try{let s=await(await fetch('/api/status',{cache:'no-store'})).json();let ok=s.ready&&s.age_ms<1500;state.textContent=s.error?'相机错误：'+s.error:ok?`在线 · ${s.name||s.source} · 深度 ${s.depth_width||''}×${s.depth_height||''} / 目标 ${s.fps} Hz · 实测 ${s.capture_fps==null?'统计中':s.capture_fps.toFixed(2)+' Hz'} · 有效深度 ${(100*s.valid_depth_fraction).toFixed(1)}% → ${(100*s.processed_valid_depth_fraction).toFixed(1)}%`:'相机尚未就绪或数据已过期';state.className=ok?'':'error';details.textContent=JSON.stringify(s,null,2)}catch(e){state.textContent='网页服务连接失败';state.className='error'}}setInterval(refresh,1000);refresh();
 </script></html>

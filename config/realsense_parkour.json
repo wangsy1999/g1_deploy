@@ -30,7 +30,7 @@
     ],
     "inpaint_below_m": 0.2,
     "inpaint_radius": 3,
-    "gaussian_kernel": 3,
+    "gaussian_kernel": 0,
     "gaussian_sigma": 1.0,
     "depth_range": [
       0.0,
