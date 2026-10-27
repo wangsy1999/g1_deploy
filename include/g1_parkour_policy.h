@@ -38,7 +38,7 @@ class Policy {
     std::deque<Image> images_;
     Joints last_action_{};
     int delay_ = 0;
-    int camera_fps_=60, real_stride_=6;
+    int camera_fps_=60, real_stride_=5;
     YAML::Node raw_profile_;
 
     template<std::size_t N>
@@ -99,10 +99,11 @@ public:
         const int train_fps=cfg["training_camera_fps"] ? cfg["training_camera_fps"].as<int>() : 50;
         const int skip=cfg["depth_history_skip_frames"] ? cfg["depth_history_skip_frames"].as<int>() : 5;
         if(camera_fps_<=0 || train_fps<=0 || skip<=0) throw std::runtime_error("Invalid camera history configuration");
-        real_stride_=int(double(camera_fps_)/train_fps*skip);
-        if(real_stride_<1 || 7*real_stride_+delay_>=camera_fps_) throw std::runtime_error("Camera history cannot fit eight frames");
         if((delay_!=0 && delay_!=1) || !std::isfinite(dt) || std::abs(dt-.02)>1e-8)
             throw std::runtime_error("Expected 20ms parkour observations and depth delay 0 or 1");
+        // History advances once per policy step, independently of camera capture FPS.
+        real_stride_=int(std::lround(double(skip)/train_fps/dt));
+        if(real_stride_<1 || 7*real_stride_+delay_>=camera_fps_) throw std::runtime_error("Camera history cannot fit eight frames");
         const std::vector<std::string> dds={
             "left_hip_pitch_joint","left_hip_roll_joint","left_hip_yaw_joint","left_knee_joint",
             "left_ankle_pitch_joint","left_ankle_roll_joint","right_hip_pitch_joint","right_hip_roll_joint",
