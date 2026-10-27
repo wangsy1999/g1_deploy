@@ -1,6 +1,9 @@
 // Shared parkour networks; MuJoCo synchronized observations or real DDS + RealSense.
 #include "g1_parkour_input.h"
+#include "g1_policy_worker.h"
 #include "g1_hardware.h"
+#include "g1_motor_channel.h"
+#include "g1_async_log.h"
 #include "g1_unitree_remote.h"
 #include <unitree/robot/channel/channel_factory.hpp>
 #include <unitree/robot/channel/channel_publisher.hpp>
@@ -55,7 +58,6 @@ void ReleaseService() {
         if(client.CheckMode(form,name)) throw std::runtime_error("MotionSwitcher CheckMode failed");
         if(name.empty()) return;
         if(client.ReleaseMode()) throw std::runtime_error("MotionSwitcher ReleaseMode failed");
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
     throw std::runtime_error("Motion service release not confirmed");
 }
@@ -128,36 +130,37 @@ int main(int argc,char** argv) {
         // All captured storage outlives the subscribers. Receive callbacks only cache.
         std::mutex mutex; State state{}; Imu torso{};
         Clock::time_point state_at{},torso_at{}; bool have_state=false,have_torso=false;
-        std::atomic<bool> command_seen{false};
         unitree::robot::ChannelSubscriber<State> states("rt/lowstate");
         states.InitChannel([&](const void* msg) {
             std::lock_guard<std::mutex> lock(mutex); state=*static_cast<const State*>(msg);
             state_at=Clock::now();have_state=true;
         },1);
         std::unique_ptr<unitree::robot::ChannelSubscriber<Imu>> imus;
-        std::unique_ptr<unitree::robot::ChannelSubscriber<Cmd>> monitor;
+        std::unique_ptr<g1_control::CommandMonitor> monitor;
         if(hardware) {
             imus=std::make_unique<unitree::robot::ChannelSubscriber<Imu>>("rt/secondary_imu");
             imus->InitChannel([&](const void* msg) {
                 std::lock_guard<std::mutex> lock(mutex);torso=*static_cast<const Imu*>(msg);
                 torso_at=Clock::now();have_torso=true;
             },1);
-            monitor=std::make_unique<unitree::robot::ChannelSubscriber<Cmd>>("rt/lowcmd");
-            monitor->InitChannel([&](const void*) {command_seen=true;},1);
+            monitor=std::make_unique<g1_control::CommandMonitor>();
         }
         unitree::robot::ChannelPublisher<Cmd> targets("rt/g1/reset_target");targets.InitChannel();
         unitree::robot::ChannelPublisher<Cmd> previews("rt/g1/dry_run_target");previews.InitChannel();
         unitree::robot::ChannelPublisher<Cmd> enables("rt/g1/reset_enable");enables.InitChannel();
         // No LowCmd publisher exists until explicit 9/Start takeover.
-        std::unique_ptr<unitree::robot::ChannelPublisher<Cmd>> publisher;
+        std::unique_ptr<g1_control::MotorPublisher> publisher;
         Keyboard keyboard; Cmd command{};command.mode_pr()=0;
         bool powered=false,active=false,holding=false,running=false,publishing=false,have_obs=false;
         g1_parkour::Observation obs;g1_parkour::DepthFrame depth;
         g1_parkour::Joints start{},target{},previous{},neutral=policy.DefaultDds();
         std::array<float,3> velocity{};
-        Clock::time_point obs_at{},reset_at{},next_policy=Clock::now(),next_log=Clock::now();
+        Clock::time_point obs_at{},reset_at{},next_log=Clock::now();
+        g1_parkour::PolicyWorker<g1_parkour::Observation,g1_parkour::Joints> policy_worker(
+            [&](const auto& observation,const auto& velocity) {return policy.Step(observation,velocity);},
+            [&] {policy.Reset();}, !hardware);
         auto next=Clock::now(),waiting=next;
-        uint64_t last_sequence=0;double last_time=-1;
+        double last_time=-1;
         auto enable_status=[&](bool on) {
             Cmd msg{};for(int i=0;i<29;++i) msg.motor_cmd()[i].mode()=on?1:0;
             msg.crc()=g1_hardware::Crc(msg);enables.Write(msg);
@@ -168,6 +171,7 @@ int main(int argc,char** argv) {
             if(!publisher->Write(command)) throw std::runtime_error("LowCmd publication failed");
             publishing=true;
         };
+        g1_control::AsyncLog log;
         auto release=[&]() {
             if(publisher && (publishing||powered)) {
                 for(int i=0;i<29;++i) {
@@ -178,19 +182,21 @@ int main(int argc,char** argv) {
                 auto until=Clock::now()+std::chrono::duration<double>(hardware?limits->damping_seconds:.01);
                 do {
                     command.crc()=g1_hardware::Crc(command);
-                    if(!publisher->Write(command)) std::cerr<<"Stop DDS publication failed; execution unconfirmed\n";
+                    if(!publisher->Write(command)) log.Line()<<"Stop DDS publication failed; execution unconfirmed\n";
                     std::this_thread::sleep_for(std::chrono::milliseconds(2));
                 } while(Clock::now()<until);
             }
             enable_status(false);
         };
-        std::cout<<"Parkour source="<<(hardware?"RealSense + torso DDS IMU":"MuJoCo synchronized camera observations")
+        log.Line()<<"Parkour source="<<(hardware?"RealSense + torso DDS IMU":"MuJoCo synchronized camera observations")
                  <<"; loopback UDP "<<port<<"; DDS domain "<<domain<<".\n"
-                 <<"DRY RUN: p reset, r policy; 9/Start enables real output and clears preview. Space/Select stops.\n"<<std::flush;
+                 <<"DRY RUN: p reset, r policy; 9/Start enables real output and clears preview. Space/Select stops.\n";
         int result=0;
         try {
             while(!stopped) {
                 auto now=Clock::now();
+                if(powered && monitor && monitor->Conflict())
+                    throw std::runtime_error("Competing LowCmd writer published after handover");
                 State snapshot;Imu imu;bool state_fresh=false,torso_fresh=false;
                 double state_age_ms=-1,torso_age_ms=-1;
                 {
@@ -200,21 +206,18 @@ int main(int argc,char** argv) {
                     if(have_state) state_age_ms=std::chrono::duration<double,std::milli>(now-state_at).count();
                     if(have_torso) torso_age_ms=std::chrono::duration<double,std::milli>(now-torso_at).count();
                 }
-                bool fresh=false;
                 if(hardware) {
                     camera->Latest([&](const g1_parkour::DepthFrame& value,Clock::time_point received) {
-                        depth=value;last_sequence=value.sequence;last_time=value.captured_at;
-                        have_obs=true;obs_at=received;fresh=true;
+                        depth=value;last_time=value.captured_at;
+                        have_obs=true;obs_at=received;
                     });
                 } else {
                     udp->Latest([&](const unsigned char* packet,std::size_t size) {
                         auto value=g1_parkour::Decode(packet,size,policy.signature);
-                        if(have_obs && (value.sequence<=last_sequence||value.time<=last_time))
-                            throw std::runtime_error("Simulator reset/replayed; restart controller");
                         if(running && have_obs && value.time-last_time>.05)
                             throw std::runtime_error("Observation frames dropped; history timing invalid");
-                        obs=value;last_sequence=value.sequence;last_time=value.time;
-                        have_obs=true;obs_at=now;fresh=true;
+                        obs=value;last_time=value.time;
+                        have_obs=true;obs_at=now;
                     });
                 }
                 bool ready=state_fresh && have_obs && now-obs_at<std::chrono::milliseconds(150);
@@ -252,18 +255,23 @@ int main(int argc,char** argv) {
                 if(key==' ') break;
                 if(key=='9' && !powered) {
                     if(input && (!input->Ready()||!input->Centered()||(!hardware&&input->MovingEnabled())))
-                        std::cout<<"Center sticks before takeover\n";
+                        log.Line()<<"Center sticks before takeover\n";
                     else {
                         if(hardware) {
                             if(!calibrated) throw std::runtime_error("Hardware output requires --hardware-calibrated; verify camera mount, IMU axes and joint signs first");
                             limits->CheckState(snapshot,1u<<3);
+                            publisher=std::make_unique<g1_control::MotorPublisher>("rt/lowcmd");
+                            publisher->InitChannel();
                             ReleaseService();
                             powered=true;command.mode_machine()=snapshot.mode_machine();
+                            for(auto& motor:command.motor_cmd()) motor={};
+                            for(int i=0;i<29;++i) {
+                                command.motor_cmd()[i].mode()=1;
+                                command.motor_cmd()[i].kd()=limits->stop_kd;
+                            }
+                            send();
+                            monitor->Arm(*publisher);
                             // If any subsequent handover check fails, the exit path sends damping.
-                            publisher=std::make_unique<unitree::robot::ChannelPublisher<Cmd>>("rt/lowcmd");
-                            publisher->InitChannel();
-                            command_seen=false;std::this_thread::sleep_for(std::chrono::milliseconds(250));
-                            if(command_seen) throw std::runtime_error("Competing LowCmd publisher after handover");
                             {
                                 std::lock_guard<std::mutex> lock(mutex);
                                 if(!have_state || Clock::now()-state_at>std::chrono::duration<double,std::milli>(limits->timeout_ms))
@@ -272,30 +280,31 @@ int main(int argc,char** argv) {
                             }
                             limits->CheckState(snapshot,1u<<3);
                         } else {
-                            publisher=std::make_unique<unitree::robot::ChannelPublisher<Cmd>>("rt/lowcmd");
+                            publisher=std::make_unique<g1_control::MotorPublisher>("rt/lowcmd");
                             publisher->InitChannel();powered=true;command.mode_machine()=snapshot.mode_machine();
                         }
                         for(int i=0;i<29;++i) previous[i]=snapshot.motor_state()[i].q();
-                        active=holding=running=false;velocity.fill(0);policy.Reset();
-                        std::cout<<"Output enabled; preview cleared. Press p / remote X to reset again.\n"<<std::flush;
+                        active=holding=running=false;velocity.fill(0);policy_worker.Pause();
+                        log.Line()<<"Output enabled; preview cleared. Press p / remote X to reset again.\n";
                     }
                 }
                 if(key=='p'||key=='P') {
                     for(int i=0;i<29;++i) start[i]=snapshot.motor_state()[i].q();
-                    reset_at=now;active=true;holding=running=false;velocity.fill(0);policy.Reset();
+                    reset_at=now;active=true;holding=running=false;velocity.fill(0);policy_worker.Pause();
                     command.mode_machine()=snapshot.mode_machine();
-                    std::cout<<"Reset started ("<<(powered?"output":"dry-run")<<").\n"<<std::flush;
+                    log.Line()<<"Reset started ("<<(powered?"output":"dry-run")<<").\n";
                 }
                 if((key=='r'||key=='R') && holding && !running) {
                     bool near=true;for(int i=0;i<29;++i) if(std::abs(obs.q[i]-policy.neutral[i])>.35) near=false;
                     if(input && (!input->Ready()||!input->Centered()||(!hardware&&input->MovingEnabled())))
-                        std::cout<<"Center sticks before policy entry\n";
+                        log.Line()<<"Center sticks before policy entry\n";
                     else if(!powered||near) {
-                        policy.Reset();running=true;fresh=true;velocity.fill(0);
-                        if(input) input->BeginPolicy();next_policy=now;
-                        std::cout<<"Parkour policy ON."<<(powered?" Output active.\n":" Dry-run only.\n")<<std::flush;
-                    } else std::cout<<"Joints not near training pose; reset first\n";
+                        policy_worker.Begin(powered);running=true;velocity.fill(0);
+                        if(input) input->BeginPolicy();
+                        log.Line()<<"Parkour policy ON."<<(powered?" Output active.\n":" Dry-run only.\n");
+                    } else log.Line()<<"Joints not near training pose; reset first\n";
                 }
+                double policy_target_age_ms=-1;
                 if(running) {
                     if(!hardware) switch(key) {
                         case 'w':velocity[0]+=.1f;break;case 's':velocity[0]-=.1f;break;
@@ -305,20 +314,23 @@ int main(int argc,char** argv) {
                     if(input) velocity=input->ControlVelocity(hardware?0:key);
                     velocity[0]=std::clamp(velocity[0],0.f,1.f);velocity[1]=0;
                     velocity[2]=std::clamp(velocity[2],-1.f,1.f);
-                    if((hardware&&now>=next_policy)||(!hardware&&fresh)) {
-                        if((!hardware&&obs.height<.5)||obs.gravity[2]>-std::cos(1.)) throw std::runtime_error("Torso height/tilt protection triggered");
-                        auto before=Clock::now();target=policy.Step(obs,velocity);
-                        if(powered && Clock::now()-before>std::chrono::duration<double>(policy.dt))
-                            throw std::runtime_error("Inference exceeded 20ms period");
-                        next_policy=now+std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(policy.dt));
+                    if((!hardware&&obs.height<.5)||obs.gravity[2]>-std::cos(1.))
+                        throw std::runtime_error("Torso height/tilt protection triggered");
+                    policy_worker.Submit(obs,velocity);
+                    if(auto latest=policy_worker.Latest()) {
+                        target=latest->target;
+                        policy_target_age_ms=std::chrono::duration<double,std::milli>(Clock::now()-latest->completed_at).count();
                     }
+                    // Until the first result, keep the reset/hold target. Latest()
+                    // enforces the same 60ms watchdog for startup and later stalls.
                 }
+
                 if(active) {
                     if(!running) {
                         double u=std::clamp(std::chrono::duration<double>(now-reset_at).count()/reset_seconds,0.,1.);
                         double blend=u*u*(3-2*u);
                         for(int i=0;i<29;++i) target[i]=start[i]+blend*(neutral[i]-start[i]);
-                        if(u==1&&!holding) {holding=true;std::cout<<"Holding training pose; press r / remote A for parkour.\n"<<std::flush;}
+                        if(u==1&&!holding) {holding=true;log.Line()<<"Holding training pose; press r / remote A for parkour.\n";}
                     }
                     for(int i=0;i<29;++i) {
                         auto& motor=command.motor_cmd()[policy.ids[i]];motor.mode()=1;
@@ -341,18 +353,26 @@ int main(int argc,char** argv) {
                 }
                 enable_status(powered);
                 if(now>=next_log) {
-                    std::cout<<"[parkour] "<<(powered?"OUTPUT":"DRY")<<" "<<(running?"policy":holding?"hold":active?"reset":"waiting")
+                    auto entry=log.Line();
+                    entry<<"[parkour] "<<(powered?"OUTPUT":"DRY")<<" "<<(running?"policy":holding?"hold":active?"reset":"waiting")
                         <<" camera_age_ms="<<(hardware ?
                            (std::chrono::duration<double>(now.time_since_epoch()).count()-depth.captured_at)*1000 :
                            std::chrono::duration<double,std::milli>(now-obs_at).count())
+                        <<" policy_target_age_ms="<<policy_target_age_ms
                         <<" velocity=["<<velocity[0]<<",0,"<<velocity[2]<<"]";
-                    if(input) std::cout<<" sticks=["<<input->Sticks()[0]<<','<<input->Sticks()[1]<<"]";
-                    std::cout<<'\n'<<std::flush;next_log=now+std::chrono::milliseconds(200);
+                    if(input) entry<<" sticks=["<<input->Sticks()[0]<<','<<input->Sticks()[1]<<"]";
+                    entry<<'\n';next_log=now+std::chrono::milliseconds(200);
                 }
-                next+=std::chrono::milliseconds(2);if(next<Clock::now()) next=Clock::now();
+                const auto control_period=std::chrono::milliseconds(2);
+                next+=control_period;
+                const auto after=Clock::now();
+                if(next<=after) next+=control_period*((after-next)/control_period+1);
                 std::this_thread::sleep_until(next);
             }
-        } catch(const std::exception& error) {std::cerr<<"Parkour stopped: "<<error.what()<<'\n';result=1;}
+        } catch(const std::exception& error) {log.Line()<<"Parkour stopped: "<<error.what()<<'\n';result=1;}
+        // Invalidate in-flight inference before damping. Do not wait for the
+        // inference thread to join until after release() has stopped output.
+        policy_worker.Pause();
         release();
         return result;
     } catch(const std::exception& error) {std::cerr<<"g1_parkour: "<<error.what()<<'\n';return 1;}

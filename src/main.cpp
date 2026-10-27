@@ -21,6 +21,8 @@
 #include <memory>
 #include <net/if.h>
 #include "g1_hardware.h"
+#include "g1_motor_channel.h"
+#include "g1_async_log.h"
 #include "g1_gamepad.h"
 #include "g1_unitree_remote.h"
 #include <unitree/robot/b2/motion_switcher/motion_switcher_client.hpp>
@@ -31,6 +33,7 @@
 #include <unitree/robot/channel/channel_subscriber.hpp>
 #ifdef G1_WITH_POLICY
 #include "g1_locomotion_policy.h"
+#include "g1_policy_worker.h"
 #endif
 
 using unitree_hg::msg::dds_::LowCmd_;
@@ -141,21 +144,21 @@ public:
             enable_publisher_.InitChannel();
         }
         if (hardware_ && !read_only_) {
-            command_monitor_ = std::make_unique<unitree::robot::ChannelSubscriber<LowCmd_>>("rt/lowcmd");
-            command_monitor_->InitChannel([this](const void*) { command_seen_ = true; }, 1);
+            command_monitor_ = std::make_unique<g1_control::CommandMonitor>();
         }
         subscriber_.InitChannel(
             std::bind(&JointReset::OnState, this, std::placeholders::_1), 1);
     }
-    ~JointReset() { subscriber_.CloseChannel(); if (command_monitor_) command_monitor_->CloseChannel(); }
+    ~JointReset() { subscriber_.CloseChannel(); command_monitor_.reset(); }
 
     int Run(double duration) {
-        std::cout << "Waiting for G1 29DOF lowstate (5 s timeout)...\n";
+        g1_control::AsyncLog log;
+        log.Line() << "Waiting for G1 29DOF lowstate (5 s timeout)...\n";
         const auto deadline = Clock::now() + std::chrono::seconds(5);
         LowState_ state{};
         while (!stop_requested && !Snapshot(state)) {
             if (Clock::now() >= deadline) {
-                std::cerr << "No valid lowstate. Check scene/robot, DDS domain and interface. " << StateError() << "\n";
+                log.Line() << "No valid lowstate. Check scene/robot, DDS domain and interface. " << StateError() << "\n";
                 return 1;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -164,12 +167,12 @@ public:
         // C++ bridge publishes 4 for 23DOF, 5 for 29DOF. Python bridge
         // leaves mode_machine at 0, so its scene must be checked by the user.
         if ((hardware_ && state.mode_machine() != 5) || (!hardware_ && state.mode_machine() != 0 && state.mode_machine() != 5)) {
-            std::cerr << "Expected 29DOF mode_machine 5, received "
+            log.Line() << "Expected 29DOF mode_machine 5, received "
                       << unsigned(state.mode_machine()) << ".\n";
             return 1;
         }
         if (read_only_) {
-            std::cout << "Read-only hardware check: valid CRC, G1 mode=5, joints/IMU/motors OK. No control service release or LowCmd publication.\n";
+            log.Line() << "Read-only hardware check: valid CRC, G1 mode=5, joints/IMU/motors OK. No control service release or LowCmd publication.\n";
             return 0;
         }
         std::array<float, kJointCount> previous_target{};
@@ -181,8 +184,8 @@ public:
         command.mode_machine() = state.mode_machine();
         Keyboard keyboard;
         auto* control_input = gamepad_ ? &gamepad_->state : unitree_remote_ ? &remote_.state : nullptr;
-        if (unitree_remote_) std::cout << "Unitree remote: Start=real handover, X=reset, A=policy, Select=stop/exit. Direct stick velocity; R1 not required.\n";
-        std::cout << "Ready. DRY RUN / command output OFF. P: reset preview (" << duration
+        if (unitree_remote_) log.Line() << "Unitree remote: Start=real handover, X=reset, A=policy, Select=stop/exit. Direct stick velocity; R1 not required.\n";
+        log.Line() << "Ready. DRY RUN / command output OFF. P: reset preview (" << duration
                   << " s), R: policy preview; 9/Start: real handover, then P required again. Space / Ctrl+C: exit.\n";
         auto start = Clock::now();
         auto next = start;
@@ -195,8 +198,17 @@ public:
         bool policy_active = false;
         std::array<float, 3> velocity{};
         g1_policy::Joints policy_target{};
-        auto next_policy = Clock::now();
-        std::cout << "Dry sequence: P -> wait -> R, no 9. Real sequence: 9 -> P -> wait -> R.\n"
+        struct PolicyObservation {
+            g1_policy::State state;
+            uint64_t sequence=0; // No frame gating: DWaQ samples LowState every policy tick.
+        };
+        using PolicyWorker=g1_parkour::PolicyWorker<PolicyObservation,g1_policy::Joints>;
+        std::unique_ptr<PolicyWorker> policy_worker;
+        if(policy_) policy_worker=std::make_unique<PolicyWorker>(
+            [&](const PolicyObservation& input,const auto& velocity) {return policy_->Step(input.state,velocity);},
+            [&] {policy_->Reset();},false,
+            std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(policy_->dt)));
+        log.Line() << "Dry sequence: P -> wait -> R, no 9. Real sequence: 9 -> P -> wait -> R.\n"
                   << "W/S: forward +/-0.1 m/s, A/D: lateral +/-0.1 m/s, Q/E: yaw +/-0.1 rad/s, X: zero velocity.\n";
 #endif
         auto publish_enable = [&](bool enabled) {
@@ -219,7 +231,7 @@ public:
             do {
                 command.crc() = CommandCrc(command);
                 if (!WriteMotor(command) && hardware_)
-                    std::cerr << "Damping command DDS publication failed; execution is unconfirmed.\n";
+                    log.Line() << "Damping command DDS publication failed; execution is unconfirmed.\n";
                 if (hardware_) std::this_thread::sleep_for(kPeriod);
             } while (Clock::now() < deadline);
             publishing = false;
@@ -229,8 +241,10 @@ public:
         std::string preview_warning;
         try {
         while (!stop_requested) {
+            if(output_enabled && command_monitor_ && command_monitor_->Conflict())
+                throw std::runtime_error("Another LowCmd writer published after handover");
             if (!Snapshot(state) || state.mode_machine() != command.mode_machine()) {
-                std::cerr << "Lowstate stale/invalid or robot mode changed; stopping. " << StateError() << "\n";
+                log.Line() << "Lowstate stale/invalid or robot mode changed; stopping. " << StateError() << "\n";
                 result = 1;
                 break;
             }
@@ -239,7 +253,7 @@ public:
                 try { CheckHardwareState(state); }
                 catch (const std::exception& error) { warning = error.what(); }
                 if (warning != preview_warning) {
-                    std::cout << (warning.empty() ? "Hardware checks recovered.\n" :
+                    log.Line() << (warning.empty() ? "Hardware checks recovered.\n" :
                         "Dry-run warning; real output blocked: " + warning + "\n");
                     preview_warning = warning;
                 }
@@ -257,27 +271,36 @@ public:
                     if(action==' ' || action=='x' || (key==0 && action)) key=action;
                 }
             } catch (const std::exception& error) {
-                std::cerr << error.what() << '\n';
+                log.Line() << error.what() << '\n';
                 result = 1;
                 break;
             }
             if (key == ' ') break;
             if (key == '9') {
                 if (unitree_remote_ && (!control_input->Ready() || !control_input->Centered() || control_input->MovingEnabled())) {
-                    std::cout << "Center Unitree sticks before Start/9 handover.\n";
+                    log.Line() << "Center Unitree sticks before Start/9 handover.\n";
                 } else if (power_locked) {
-                    std::cout << "Power-on locked after reset/policy entry; restart the controller to power on again.\n";
+                    log.Line() << "Power-on locked after reset/policy entry; restart the controller to power on again.\n";
                 } else if (output_enabled) {
-                    std::cout << "Command output already ENABLED. Press P to reset.\n";
+                    log.Line() << "Command output already ENABLED. Press P to reset.\n";
                 } else {
                     if (hardware_) {
                         // Validate current real state before changing the official service.
                         if (!Snapshot(state)) throw std::runtime_error("No fresh state before handover");
                         CheckHardwareState(state);
-                        ReleaseMotionService();
                         InitMotorPublisher();
+                        ReleaseMotionService();
                         publishing = true; // Ensure faults after confirmed handover enter damping stop.
                         output_armed_ = true;
+                        // Start damping immediately after confirmed service release.
+                        for(auto& motor:command.motor_cmd()) motor={};
+                        for(std::size_t i=0;i<kJointCount;++i) {
+                            command.motor_cmd()[i].mode()=1;
+                            command.motor_cmd()[i].kd()=hardware_->stop_kd;
+                        }
+                        command.crc()=CommandCrc(command);
+                        if(!WriteMotor(command)) throw std::runtime_error("Initial damping publication failed");
+                        command_monitor_->Arm(*publisher_);
                         if (!Snapshot(state)) throw std::runtime_error("No valid state after releasing motion service");
                         CheckHardwareState(state);
                         for (std::size_t i = 0; i < kJointCount; ++i) previous_target[i] = state.motor_state()[i].q();
@@ -288,10 +311,10 @@ public:
 #ifdef G1_WITH_POLICY
                     policy_active = false;
                     velocity.fill(0);
-                    if (policy_) policy_->Reset();
+                    if (policy_worker) policy_worker->Pause();
 #endif
                     output_enabled = true;
-                    std::cout << "Command output ENABLED. Dry preview cleared; damping wait. Press P to reset from measured pose.\n";
+                    log.Line() << "Command output ENABLED. Dry preview cleared; damping wait. Press P to reset from measured pose.\n";
                 }
             }
             if (key == 'p' || key == 'P') {
@@ -299,14 +322,14 @@ public:
 #ifdef G1_WITH_POLICY
                 policy_active = false;
                 velocity.fill(0);
-                if (policy_) policy_->Reset();
+                if (policy_worker) policy_worker->Pause();
 #endif
                 for (std::size_t i = 0; i < kJointCount; ++i)
                     start_angles[i] = state.motor_state()[i].q();
                 start = Clock::now();
                 active = true;
                 holding = false;
-                std::cout << "Reset target generated from current joint angles."
+                log.Line() << "Reset target generated from current joint angles."
                           << (output_enabled ? " Publishing enabled.\n" : " Output disabled; targets only.\n");
             }
 #ifdef G1_WITH_POLICY
@@ -316,16 +339,16 @@ public:
                 for (std::size_t i = 0; i < kJointCount; ++i)
                     if (std::abs(state.motor_state()[i].q() - neutral[i]) > 0.35f) pose_ready = false;
                 if (!active || !holding || (output_enabled && !pose_ready)) {
-                    std::cout << "Policy requires completed reset. Dry run: P -> wait -> R. Real output also requires measured pose near training pose.\n";
+                    log.Line() << "Policy requires completed reset. Dry run: P -> wait -> R. Real output also requires measured pose near training pose.\n";
                 } else if(control_input && (!control_input->Ready() || !control_input->Centered() || control_input->MovingEnabled())) {
-                    std::cout<<(unitree_remote_ ? "Center sticks before A/policy entry.\n" : "Center sticks and release RB before policy entry.\n");
+                    log.Line()<<(unitree_remote_ ? "Center sticks before A/policy entry.\n" : "Center sticks and release RB before policy entry.\n");
                 } else {
-                    policy_->Reset();
+                    policy_target=policy_->DefaultDds();
+                    policy_worker->Begin(hardware_ && output_enabled);
                     velocity.fill(0);
                     policy_active = true;
                     if(control_input) control_input->BeginPolicy();
-                    next_policy = Clock::now();
-                    std::cout << (output_enabled ? "REAL" : "DRY RUN") << " locomotion policy ON; velocity = [0, 0, 0]. P: reset, Space / Ctrl+C: exit.\n";
+                    log.Line() << (output_enabled ? "REAL" : "DRY RUN") << " locomotion policy ON; velocity = [0, 0, 0]. P: reset, Space / Ctrl+C: exit.\n";
                 }
             }
             if (policy_active) {
@@ -344,25 +367,20 @@ public:
                 if(control_input) velocity=policy_->GamepadVelocity(control_input->ControlVelocity(key));
                 policy_->ClampVelocity(velocity);
                 if (changed || (control_input && velocity != previous_velocity && (Clock::now() >= next_input_log_ || velocity == std::array<float,3>{0,0,0}))) {
-                    std::cout << "Velocity: " << velocity[0] << ", " << velocity[1] << ", " << velocity[2] << '\n';
+                    log.Line() << "Velocity: " << velocity[0] << ", " << velocity[1] << ", " << velocity[2] << '\n';
                     next_input_log_ = Clock::now() + std::chrono::milliseconds(200);
                 }
-                if (Clock::now() >= next_policy) {
-                    g1_policy::State input;
-                    for (std::size_t i = 0; i < kJointCount; ++i) {
-                        input.q[i] = state.motor_state()[i].q();
-                        input.dq[i] = state.motor_state()[i].dq();
-                    }
-                    std::copy_n(state.imu_state().quaternion().begin(), 4, input.quaternion.begin());
-                    std::copy_n(state.imu_state().gyroscope().begin(), 3, input.omega.begin());
-                    const auto inference_start = Clock::now();
-                    policy_target = policy_->Step(input, velocity);
-                    if (hardware_ && output_enabled && Clock::now()-inference_start > std::chrono::duration<double>(policy_->dt))
-                        throw std::runtime_error("Policy inference exceeded its control period");
-                    next_policy += std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(policy_->dt));
-                    if (next_policy < Clock::now())
-                        next_policy = Clock::now() + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(policy_->dt));
+                PolicyObservation input;
+                for (std::size_t i = 0; i < kJointCount; ++i) {
+                    input.state.q[i] = state.motor_state()[i].q();
+                    input.state.dq[i] = state.motor_state()[i].dq();
                 }
+                std::copy_n(state.imu_state().quaternion().begin(), 4, input.state.quaternion.begin());
+                std::copy_n(state.imu_state().gyroscope().begin(), 3, input.state.omega.begin());
+                policy_worker->Submit(input,velocity);
+                if(auto latest=policy_worker->Latest()) policy_target=latest->target;
+                // Hold the default pose until the first result. Latest() checks
+                // both target and input age, including the first-result deadline.
             }
 #endif
             publish_enable(output_enabled);
@@ -379,7 +397,8 @@ public:
                     publishing = true;
                 }
                 next += kPeriod;
-                if (next < Clock::now()) next = Clock::now() + kPeriod;
+                const auto after=Clock::now();
+                if(next<=after) next+=kPeriod*((after-next)/kPeriod+1);
                 std::this_thread::sleep_until(next);
                 continue;  // do not publish commands until P is pressed after power-on
             }
@@ -425,18 +444,23 @@ public:
                 publishing = true;
             }
             if (u == 1.0 && !holding) {
-                std::cout << "Target interpolation complete."
+                log.Line() << "Target interpolation complete."
                           << (output_enabled ? " Holding default pose.\n" : " Output disabled; target only.\n");
                 holding = true;
             }
             next += kPeriod;
-            if (next < Clock::now()) next = Clock::now() + kPeriod;
+            const auto after=Clock::now();
+            if(next<=after) next+=kPeriod*((after-next)/kPeriod+1);
             std::this_thread::sleep_until(next);
         }
         } catch (const std::exception& error) {
-            std::cerr << "Controller error: " << error.what() << '\n';
+            log.Line() << "Controller error: " << error.what() << '\n';
             result = 1;
         }
+        // Invalidate pending inference before damping; join only after output stops.
+#ifdef G1_WITH_POLICY
+        if(policy_worker) policy_worker->Pause();
+#endif
         release();
         publish_enable(false);
         return result;
@@ -448,7 +472,7 @@ private:
     }
     void InitMotorPublisher() {
         if (publisher_) return;
-        publisher_ = std::make_unique<unitree::robot::ChannelPublisher<LowCmd_>>("rt/lowcmd");
+        publisher_ = std::make_unique<g1_control::MotorPublisher>("rt/lowcmd");
         publisher_->InitChannel();
     }
     bool WriteMotor(const LowCmd_& command) {
@@ -502,12 +526,8 @@ private:
             if (client.CheckMode(form, name) != 0) throw std::runtime_error("MotionSwitcher CheckMode failed");
             if (name.empty()) { released = true; break; }
             if (client.ReleaseMode() != 0) throw std::runtime_error("MotionSwitcher ReleaseMode failed");
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
         if (!released || stop_requested) throw std::runtime_error("Motion service release not confirmed");
-        command_seen_ = false;
-        std::this_thread::sleep_for(std::chrono::milliseconds(250));
-        if (command_seen_) throw std::runtime_error("Another LowCmd publisher is active after service release");
     }
     const ResetConfig config_;
     const g1_hardware::Limits* hardware_ = nullptr;
@@ -518,13 +538,12 @@ private:
     std::atomic<bool> output_armed_{false};
     bool hardware_fault_ = false; // A hardware validation failure requires restarting the process.
     std::string state_error_;
-    std::atomic<bool> command_seen_{false};
-    std::unique_ptr<unitree::robot::ChannelSubscriber<LowCmd_>> command_monitor_;
+    std::unique_ptr<g1_control::CommandMonitor> command_monitor_;
     std::mutex mutex_;
     LowState_ state_{};
     Clock::time_point received_at_{};
     bool valid_ = false;
-    std::unique_ptr<unitree::robot::ChannelPublisher<LowCmd_>> publisher_;
+    std::unique_ptr<g1_control::MotorPublisher> publisher_;
     unitree::robot::ChannelPublisher<LowCmd_> target_publisher_;
     unitree::robot::ChannelPublisher<LowCmd_> dry_target_publisher_;
     unitree::robot::ChannelPublisher<LowCmd_> enable_publisher_;

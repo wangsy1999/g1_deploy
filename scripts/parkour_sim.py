@@ -39,7 +39,13 @@ def main():
     config.PARKOUR_OBSERVATIONS = True
     config.PARKOUR_OBSERVATION_PORT = args.port
     config.PARKOUR_DEPTH_PREVIEW = False
-    runpy.run_path(str(sim/"unitree_mujoco.py"), run_name="__main__")
+    simulator = str(sim/"unitree_mujoco.py")
+    previous_argv = sys.argv
+    try:
+        sys.argv = [simulator]
+        runpy.run_path(simulator, run_name="__main__")
+    finally:
+        sys.argv = previous_argv
 
 
 if __name__ == "__main__":
