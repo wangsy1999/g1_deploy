@@ -44,10 +44,20 @@ inline void CheckTelemetryState(const unitree_hg::msg::dds_::LowState_& state) {
     for (float v : state.imu_state().gyroscope())
         if (!std::isfinite(v)) throw std::runtime_error("Invalid hardware gyroscope");
 }
+// Validate outgoing fields without changing policy/reset targets.
+inline void CheckCommand(const unitree_hg::msg::dds_::LowCmd_& cmd) {
+    for (int i = 0; i < 29; ++i) {
+        const auto& motor = cmd.motor_cmd()[i];
+        if (!std::isfinite(motor.q()) || !std::isfinite(motor.dq()) ||
+            !std::isfinite(motor.kp()) || !std::isfinite(motor.kd()) || !std::isfinite(motor.tau()))
+            throw std::runtime_error("Non-finite hardware command at DDS joint "+std::to_string(i));
+    }
+}
 struct Limits {
-    std::array<float, 29> lower{}, upper{}, velocity{};
+    std::array<float, 29> lower{}, upper{};
     double timeout_ms = 100, max_tilt = 1.0, damping_seconds = 0.5;
-    float temperature = 70, target_rate = 10, stop_kd = 1;
+    float temperature = 70, stop_kd = 1;
+    bool limit_target_position = false;
     explicit Limits(const YAML::Node& root) {
         const auto cfg = root["hardware"];
         if (!cfg) throw std::runtime_error("Missing hardware configuration");
@@ -61,19 +71,18 @@ struct Limits {
             }
         };
         read("joint_lower", lower); read("joint_upper", upper);
-        read("joint_velocity", velocity);
+        limit_target_position = cfg["limit_target_position"] ? cfg["limit_target_position"].as<bool>() : false;
         timeout_ms = cfg["state_timeout_ms"].as<double>();
         max_tilt = cfg["max_tilt_rad"].as<double>();
         temperature = cfg["max_temperature_c"].as<float>();
-        target_rate = cfg["target_rate_rad_s"].as<float>();
         stop_kd = cfg["stop_kd"].as<float>();
         damping_seconds = cfg["damping_seconds"].as<double>();
-        for (double v : {timeout_ms, max_tilt, double(temperature), double(target_rate), double(stop_kd), damping_seconds})
+        for (double v : {timeout_ms, max_tilt, double(temperature), double(stop_kd), damping_seconds})
             if (!std::isfinite(v) || v <= 0) throw std::runtime_error("Invalid hardware protection setting");
         if (timeout_ms > 500 || max_tilt >= 1.57 || damping_seconds > 5)
             throw std::runtime_error("Hardware protection setting outside supported range");
         for (int i = 0; i < 29; ++i)
-            if (lower[i]+0.02f >= upper[i] || velocity[i] <= 0)
+            if (lower[i]+0.02f >= upper[i])
                 throw std::runtime_error("Invalid per-joint hardware limits");
     }
     void CheckState(const unitree_hg::msg::dds_::LowState_& state, unsigned remote_stop_mask = 1u << 8) const {
@@ -100,20 +109,12 @@ struct Limits {
         const unsigned keys = unsigned(remote[2]) | (unsigned(remote[3]) << 8);
         if (keys & remote_stop_mask) throw std::runtime_error("Remote requested damping stop");
     }
-    void LimitCommand(unitree_hg::msg::dds_::LowCmd_& cmd,
-                      std::array<float,29>& previous, double dt) const {
-        for (int i = 0; i < 29; ++i) {
-            auto& motor = cmd.motor_cmd()[i];
-            if (!std::isfinite(motor.q()) || !std::isfinite(motor.dq()) ||
-                !std::isfinite(motor.kp()) || !std::isfinite(motor.kd()) || !std::isfinite(motor.tau()))
-                throw std::runtime_error("Non-finite hardware command at DDS joint "+std::to_string(i));
-            const float bound = std::min(target_rate, velocity[i])*dt;
-            const float target = std::clamp(motor.q(), lower[i]+0.01f, upper[i]-0.01f);
-            // A measured initial angle may now be outside configured bounds.
-            // Keep outgoing targets inside bounds, even if the initial correction
-            // cannot also satisfy the slew limit from that out-of-range value.
-            motor.q() = std::clamp(std::clamp(target, previous[i]-bound, previous[i]+bound), lower[i]+0.01f, upper[i]-0.01f);
-            previous[i] = motor.q();
+    // Optional position clamp only; no target slew-rate limiting.
+    void PrepareCommand(unitree_hg::msg::dds_::LowCmd_& cmd) const {
+        CheckCommand(cmd);
+        if (limit_target_position) {
+            for (int i = 0; i < 29; ++i)
+                cmd.motor_cmd()[i].q() = std::clamp(cmd.motor_cmd()[i].q(), lower[i], upper[i]);
         }
     }
 };

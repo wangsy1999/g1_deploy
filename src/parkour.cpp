@@ -153,7 +153,7 @@ int main(int argc,char** argv) {
         Keyboard keyboard; Cmd command{};command.mode_pr()=0;
         bool powered=false,active=false,holding=false,running=false,publishing=false,have_obs=false;
         g1_parkour::Observation obs;g1_parkour::DepthFrame depth;
-        g1_parkour::Joints start{},target{},previous{},neutral=policy.DefaultDds();
+        g1_parkour::Joints start{},target{},neutral=policy.DefaultDds();
         std::array<float,3> velocity{};
         Clock::time_point obs_at{},reset_at{},next_log=Clock::now();
         g1_parkour::PolicyWorker<g1_parkour::Observation,g1_parkour::Joints> policy_worker(
@@ -283,7 +283,6 @@ int main(int argc,char** argv) {
                             publisher=std::make_unique<g1_control::MotorPublisher>("rt/lowcmd");
                             publisher->InitChannel();powered=true;command.mode_machine()=snapshot.mode_machine();
                         }
-                        for(int i=0;i<29;++i) previous[i]=snapshot.motor_state()[i].q();
                         active=holding=running=false;velocity.fill(0);policy_worker.Pause();
                         log.Line()<<"Output enabled; preview cleared. Press p / remote X to reset again.\n";
                     }
@@ -338,7 +337,7 @@ int main(int argc,char** argv) {
                         motor.dq()=motor.tau()=0;
                     }
                     if(powered) {
-                        if(hardware) limits->LimitCommand(command,previous,.002);
+                        if(hardware) limits->PrepareCommand(command);
                         send();targets.Write(command);
                     } else {
                         auto preview=command;for(auto& motor:preview.motor_cmd()) motor.mode()=0;

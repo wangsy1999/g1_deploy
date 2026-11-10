@@ -37,6 +37,7 @@ class Policy {
     std::deque<std::array<float,96>> history_;
     std::deque<Image> images_;
     Joints last_action_{};
+    Joints target_lower_{}, target_upper_{};
     int delay_ = 0;
     int camera_fps_=60, real_stride_=5;
     YAML::Node raw_profile_;
@@ -93,6 +94,10 @@ public:
         neutral=Read<29>(cfg["default_joint_pos"]);
         kp=Read<29>(cfg["kp"]); kd=Read<29>(cfg["kd"]); scale=Read<29>(cfg["action_scale"]);
         sign=Read<29>(cfg["joint_sign"]);
+        target_lower_=Read<29>(cfg["joint_clip_lower"]);
+        target_upper_=Read<29>(cfg["joint_clip_upper"]);
+        for (int i=0;i<29;++i)
+            if(target_lower_[i]>target_upper_[i]) throw std::runtime_error("Reversed Parkour target bounds");
         delay_=cfg["depth_delay_frames"].as<int>();
         dt=cfg["step_dt"].as<double>();
         camera_fps_=cfg["camera_depth_fps"] ? cfg["camera_depth_fps"].as<int>() : 60;
@@ -217,6 +222,7 @@ public:
         for(int i=0;i<29;++i) {
             last_action_[i]=actions[i]; target[ids[i]]=sign[i]*(neutral[i]+scale[i]*actions[i]);
             if(!std::isfinite(target[ids[i]])) throw std::runtime_error("Non-finite target");
+            target[ids[i]]=std::clamp(target[ids[i]],target_lower_[i],target_upper_[i]);
         }
         return target;
     }

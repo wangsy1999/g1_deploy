@@ -253,5 +253,7 @@
   ],
   "camera_depth_fps": 60,
   "training_camera_fps": 50,
-  "depth_history_skip_frames": 5
+  "depth_history_skip_frames": 5,
+  "joint_clip_upper": [5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5],
+  "joint_clip_lower": [-5, -5, -5, -5, -5, -5, -5, -5, -5, -5, -5, -5, -5, -5, -5, -5, -5, -5, -5, -5, -5, -5, -5, -5, -5, -5, -5, -5, -5]
 }

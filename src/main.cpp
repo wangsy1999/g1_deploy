@@ -175,8 +175,6 @@ public:
             log.Line() << "Read-only hardware check: valid CRC, G1 mode=5, joints/IMU/motors OK. No control service release or LowCmd publication.\n";
             return 0;
         }
-        std::array<float, kJointCount> previous_target{};
-        for (std::size_t i = 0; i < kJointCount; ++i) previous_target[i] = state.motor_state()[i].q();
         std::array<float, kJointCount> start_angles{};
 
         LowCmd_ command{};
@@ -303,7 +301,6 @@ public:
                         command_monitor_->Arm(*publisher_);
                         if (!Snapshot(state)) throw std::runtime_error("No valid state after releasing motion service");
                         CheckHardwareState(state);
-                        for (std::size_t i = 0; i < kJointCount; ++i) previous_target[i] = state.motor_state()[i].q();
                     }
                     // Never apply an old dry-run target when enabling real output.
                     active = false;
@@ -428,7 +425,7 @@ public:
             }
             if (hardware_ && output_enabled) {
                 if (!Snapshot(state)) throw std::runtime_error("Hardware state invalid before command publication: " + StateError());
-                hardware_->LimitCommand(command, previous_target, 0.002);
+                hardware_->PrepareCommand(command);
             }
             command.crc() = CommandCrc(command);
             // Preview has a separate telemetry topic; it is never sent to actuators.
