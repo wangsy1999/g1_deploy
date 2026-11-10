@@ -82,13 +82,13 @@ bash scripts/parkour.sh sim --domain 1 --port 17200
 先 `p → 等待 Holding training pose → r` 空跑查看目标；
 按 `9` 使能输出会清空空跑目标，再 `p → 等待复位 → r`。
 `w/s` 前向速度±0.1 m/s，`q/e` 转向±0.1 rad/s，`x` 清零，空格/Ctrl+C 停止。
-仿真 F710 可添加 `--joystick /dev/input/js0`，映射沿用原程序。
+仿真 F710 可添加 `--joystick /dev/input/js0`：Start 使能、X 复位、A 进入策略，进入前摇杆回中；进入后直接用摇杆控制前向和转向，无需按住 RB，Y 清零、B 停止。
 仿真域必须为正数；本程序始终将 UDP 绑定到回环地址。
 
 
 ## 实机单命令启动（自动相机）
 
-在安装目录执行 `./g1 parkour real eth0`，入口会先启动 RealSense 网页服务和本机 UDP 17201 深度转发，等新帧就绪后再启动 Parkour。启动后仍为空跑，真实输出仍须 `--hardware-calibrated` 和 Start。
+在安装目录执行 `./g1 parkour real eth0`，入口会先启动 RealSense 网页服务和本机 UDP 17201 深度转发，等新帧就绪后再启动 Parkour。启动后仍为空跑，按 Start 接管后才启用真实输出。
 
 相机网页为 `http://机器人当前IP:8766/`。自动启动的相机日志保存在 `install/logs/parkour-camera.log`；运控退出或 Ctrl+C 时停止本次启动的相机。已有匹配 UDP 端口的真实相机服务会被复用，退出时保留；已有服务未转发深度时会明确报错，不会抢占设备。
 
@@ -113,12 +113,6 @@ Start 之前只有 `rt/g1/dry_run_target`，不会创建 `rt/lowcmd` 发布者�
 `p/X → 等待 → r/A` 可以先空跑，网页关节监控可显示空跑目标。空跑允许尚未达到训练姿态的机器人生成推理目标，实输出要求复位后接近训练姿态。
 
 用户已确认相机按训练位置/朝向安装；实输出前仍须核对 torso IMU 坐标轴、腰部关节方向及硬件参数。
-核对完成后显式添加：
-
-```bash
-bash scripts/parkour.sh real eth0 --hardware-calibrated
-```
-
 吊架上按 Start，确认 SDK MotionSwitcher 服务释放且未观察到其他 LowCmd 发布者，再 X 复位、A 策略。
 使能会清空所有空跑目标，不能直接把空跑姿态切到电机。停止后发送约 0.5 秒阻尼命令。
 低层开发状态和独立停止手段仍按该机器人交付文档准备。

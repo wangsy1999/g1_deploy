@@ -66,7 +66,7 @@ int main(int argc,char** argv) {
     std::signal(SIGINT,Stop); std::signal(SIGTERM,Stop); std::signal(SIGHUP,Stop);
     std::string models=G1_PARKOUR_DEFAULT_MODELS,config=G1_PARKOUR_DEFAULT_CONFIG;
     std::string limits_config=G1_POLICY_DEFAULT_CONFIG,interface="lo",joystick;
-    bool hardware=false,check=false,calibrated=false,mode_set=false;
+    bool hardware=false,check=false,mode_set=false;
     int domain=1,port=0; double reset_seconds=3;
     try {
         for(int i=1;i<argc;++i) {
@@ -85,15 +85,14 @@ int main(int argc,char** argv) {
             else if(arg=="--port") port=std::stoi(value());
             else if(arg=="--reset-seconds") reset_seconds=std::stod(value());
             else if(arg=="--joystick") joystick=value();
-            else if(arg=="--hardware-calibrated") calibrated=true;
             else if(arg=="--check-policy") check=true;
             else if(arg=="--help") {
                 std::cout<<"g1_parkour --sim [--domain 1 --interface lo --port 17200]\n"
-                    <<"g1_parkour --hardware --domain 0 --interface ROBOT_IF [--port 17201] [--hardware-calibrated]\n"
+                    <<"g1_parkour --hardware --domain 0 --interface ROBOT_IF [--port 17201]\n"
                     <<"Common: --model-dir DIR --config JSON --limits YAML --reset-seconds 3 --check-policy\n"
-                    <<"Simulation F710: --joystick DEVICE. Hardware: Unitree Start enable, X reset, A policy, Select stop; direct sticks.\n"
+                    <<"Simulation F710: --joystick DEVICE; Start enable, X reset, A policy, Y zero, B stop. Hardware: Unitree Start enable, X reset, A policy, Select stop; direct sticks.\n"
                     <<"Startup is dry-run. p -> wait -> r previews targets; 9/Start hands over, clears preview, then p -> r again.\n"
-                    <<"Hardware output needs --hardware-calibrated after verifying camera pose, torso IMU axes and joint signs.\n";
+                    <<"Verify camera pose, torso IMU axes and joint signs before Start handover.\n";
                 return 0;
             } else throw std::runtime_error("Unknown argument: "+arg);
         }
@@ -119,7 +118,7 @@ int main(int argc,char** argv) {
                 throw std::runtime_error("Parkour reset pose exceeds hardware limits");
         }
         std::unique_ptr<g1_gamepad::Device> gamepad;
-        if(!joystick.empty()) gamepad=std::make_unique<g1_gamepad::Device>(joystick);
+        if(!joystick.empty()) gamepad=std::make_unique<g1_gamepad::Device>(joystick,false,false);
         g1_unitree_remote::Input remote;
         auto* input=hardware?&remote.state:gamepad?&gamepad->state:nullptr;
         std::unique_ptr<g1_parkour::UdpInput> udp;
@@ -254,11 +253,10 @@ int main(int argc,char** argv) {
                 if(input) {char action=input->Action();if(action && key!=' ') key=action;}
                 if(key==' ') break;
                 if(key=='9' && !powered) {
-                    if(input && (!input->Ready()||!input->Centered()||(!hardware&&input->MovingEnabled())))
+                    if(input && (!input->Ready()||!input->Centered()||(input->HoldRequired()&&input->MovingEnabled())))
                         log.Line()<<"Center sticks before takeover\n";
                     else {
                         if(hardware) {
-                            if(!calibrated) throw std::runtime_error("Hardware output requires --hardware-calibrated; verify camera mount, IMU axes and joint signs first");
                             limits->CheckState(snapshot,1u<<3);
                             publisher=std::make_unique<g1_control::MotorPublisher>("rt/lowcmd");
                             publisher->InitChannel();
@@ -295,7 +293,7 @@ int main(int argc,char** argv) {
                 }
                 if((key=='r'||key=='R') && holding && !running) {
                     bool near=true;for(int i=0;i<29;++i) if(std::abs(obs.q[i]-policy.neutral[i])>.35) near=false;
-                    if(input && (!input->Ready()||!input->Centered()||(!hardware&&input->MovingEnabled())))
+                    if(input && (!input->Ready()||!input->Centered()||(input->HoldRequired()&&input->MovingEnabled())))
                         log.Line()<<"Center sticks before policy entry\n";
                     else if(!powered||near) {
                         policy_worker.Begin(powered);running=true;velocity.fill(0);

@@ -38,12 +38,11 @@ C++控制程序不依赖MuJoCo、ROS或Python；可选网页监控需要Python�
 ./g1 read-only eth0                 # 只读 LowState、CRC、机型、电机和 IMU 检查后退出
 ./g1 run eth0                       # 键盘控制入口，启动时为空跑
 ./g1 run eth0 remote                # 原配遥控器控制入口
-./g1 run eth0 /dev/input/js0         # F710 控制入口
 ```
 
 键盘空跑：`p → 等待 Target interpolation complete → r`；真实输出：`9 → p → 等待 Holding default pose → r`。
 `w/s` 调整前后速度、`a/d` 调整横向速度、`q/e` 调整转向、`x` 清零，空格或 Ctrl+C 停止。
-原配遥控器对应 `Start` 接管、`X` 复位、`A` 策略、`Select` 停止，摇杆直接控制速度；F710 对应 `Start` 接管、`A` 复位、`Y` 策略、按住 `RB` 用摇杆运动、`X` 清零、`B` 停止。
+原配遥控器对应 `Start` 接管、`X` 复位、`A` 策略、`Select` 停止，摇杆直接控制速度；F710 对应 `Start` 接管、`A` 复位、`Y` 策略、仅仿真使用，直接用摇杆运动、`X` 清零、`B` 停止。
 接管会清空空跑目标，必须重新复位再进入策略。具体状态要求和保护见下文与 [硬件说明](docs/HARDWARE.md)。
 
 不安装时可直接运行构建产物；位置参数依次为复位秒数、网卡、DDS 域、配置和模型：
@@ -69,14 +68,12 @@ bash scripts/parkour.sh sim --domain 1 --port 17200
 
 # 实机：自动启动/复用相机，等新帧就绪后启动运控，默认空跑
 bash scripts/parkour.sh real eth0
-# 完成相机安装、torso IMU 轴向、关节方向和硬件参数核对后，允许手动接管
-bash scripts/parkour.sh real eth0 --hardware-calibrated
 ```
 
 安装后分别使用 `./g1 parkour check`、`./g1 parkour sim ...`、`./g1 parkour real eth0 ...`。
 仿真 Python 环境需外部仓库及其 MuJoCo、NumPy、pygame、`unitree_sdk2py` 依赖；本仓库不包含仿真器、XML 和网格。
 仿真键盘使用 `p` 复位、`r` 策略、`9` 使能输出、`w/s` 前向速度、`q/e` 转向、`x` 清零、空格/Ctrl+C 停止；可加 `--joystick /dev/input/js0` 使用 F710。
-实机使用原配遥控器 `X → 等待 → A` 空跑；显式指定 `--hardware-calibrated` 后才可 `Start → X → 等待复位 → A` 进入真实输出，`Select` 停止。实机还需要 `rt/secondary_imu` 的 torso IMU。
+实机使用原配遥控器 `X → 等待 → A` 空跑；完成相机安装、torso IMU 轴向、关节方向和硬件参数核对后，`Start → X → 等待复位 → A` 进入真实输出，`Select` 停止。实机还需要 `rt/secondary_imu` 的 torso IMU。
 
 常用选项：`--port` 修改深度 UDP 端口（仿真默认 `17200`，实机 `17201`），`--reset-seconds` 修改复位时长（默认 3 秒），`--model-dir`、`--config`、`--limits` 指定模型、策略配置和硬件限制。
 实机包装脚本还支持 `--camera-web-port 8767` 修改网页端口、`--no-auto-camera` 改为手动管理相机。
@@ -279,12 +276,11 @@ cpack -G TGZ
 ```bash
 cd install
 ./g1 run enP8p1s0
-# 可选 F710：./g1 run enP8p1s0 /dev/input/js0
 ```
 
 程序默认空跑，读取真实 LowState；不按 `9`，直接按 `p` 预览复位，等待 `Target interpolation complete` 后按 `r` 执行策略推理。
-`w/s`、`a/d`、`q/e` 和 `x` 调整或清零预览速度；空格、Ctrl+C 或F710的B退出。
-按下 `9` 或 F710 Start 才申请接管并打开真实输出。在此之前不创建 `rt/lowcmd` 发布器、
+`w/s`、`a/d`、`q/e` 和 `x` 调整或清零预览速度；空格或 Ctrl+C 退出。
+按下 `9` 才申请接管并打开真实输出。在此之前不创建 `rt/lowcmd` 发布器、
 不调用 MotionSwitcher、退出时也不发阻尼指令。预览目标使用独立的 `rt/g1/dry_run_target` 遥测话题，
 网页标为“空跑”，本程序 Enable 显示 OFF。空跑不改变机器人电源、官方服务或其他程序的输出状态。
 按 `9` 时先严格检查真实状态；通过后释放原运动服务、清除空跑目标和策略历史并进入阻尼等待。
@@ -332,7 +328,7 @@ cd /home/unitree/g1_deploy/install
 ```
 
 原配遥控器使用 LowState 内的 `wireless_remote`，不需要 USB 接收器或 `/dev/input/js0`。
-此入口与 F710 输入互斥；不加 `remote` 的键盘入口保持原行为。
+真机使用原配遥控器或键盘；不加 `remote` 时使用键盘，F710 仅用于仿真。
 
 | 输入 | 行为 |
 | --- | --- |
@@ -365,12 +361,13 @@ LowState超时、无效轴或软件故障会停止，但LowState持续更新不�
 
 ```bash
 ./g1 joystick /dev/input/js0       # 仅手柄输入，不初始化DDS
-./g1 run eth0 /dev/input/js0
+./bin/g1_dwaq 3 lo 1 config/g1_locomotion.yaml models/policy.onnx --joystick /dev/input/js0
 ```
 
-Start使能、A复位、Y进入策略；进入前摇杆居中并松开RB。
-按住RB：左杆前后控制前后速度，左杆左右控制横移，右杆左右控制转向。
-松开RB归零，X清零并锁定运动，松开RB且摇杆居中后可重新运动；B停止并退出。
+Start使能、X复位、A进入策略；仿真进入前摇杆居中，进入后直接用摇杆运动，无需按住RB。
+DreamWaQ左杆前后控制前后速度、左右控制横移，右杆左右控制转向；Parkour仅支持前向和转向。
+摇杆回中归零，Y清零并锁定运动，摇杆回中后可重新运动；B停止并退出。
+真机使用原配遥控器或键盘，不支持 F710。
 速度按YAML范围缩放：默认前后`[-0.6,1]m/s`、横向`[-0.5,0.5]m/s`、转向`[-1.57,1.57]rad/s`。
 输入诊断显示每个原始轴值，左杆前后为`ABS_Y (0x1)`；若只变化`0x11`，检查MODE状态。
 手柄USB读取失败触发停止，但没有无线链路心跳，不能保证识别接收器仍在线时的无线失联。
@@ -381,7 +378,7 @@ Start使能、A复位、Y进入策略；进入前摇杆居中并松开RB。
 ./build/g1_dwaq --check-policy
 ./build/g1_dwaq --check-joystick --joystick /dev/input/js0
 ./build/g1_dwaq --hardware-read-only 3 eth0 0 config/g1_locomotion.yaml
-./build/g1_dwaq --hardware 3 eth0 0 config/g1_locomotion.yaml models/policy.onnx --joystick /dev/input/js0
+./build/g1_dwaq 3 lo 1 config/g1_locomotion.yaml models/policy.onnx --joystick /dev/input/js0
 ```
 
 ## 验证范围

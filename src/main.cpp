@@ -275,7 +275,7 @@ public:
             }
             if (key == ' ') break;
             if (key == '9') {
-                if (unitree_remote_ && (!control_input->Ready() || !control_input->Centered() || control_input->MovingEnabled())) {
+                if (unitree_remote_ && (!control_input->Ready() || !control_input->Centered() || (control_input->HoldRequired() && control_input->MovingEnabled()))) {
                     log.Line() << "Center Unitree sticks before Start/9 handover.\n";
                 } else if (power_locked) {
                     log.Line() << "Power-on locked after reset/policy entry; restart the controller to power on again.\n";
@@ -337,8 +337,8 @@ public:
                     if (std::abs(state.motor_state()[i].q() - neutral[i]) > 0.35f) pose_ready = false;
                 if (!active || !holding || (output_enabled && !pose_ready)) {
                     log.Line() << "Policy requires completed reset. Dry run: P -> wait -> R. Real output also requires measured pose near training pose.\n";
-                } else if(control_input && (!control_input->Ready() || !control_input->Centered() || control_input->MovingEnabled())) {
-                    log.Line()<<(unitree_remote_ ? "Center sticks before A/policy entry.\n" : "Center sticks and release RB before policy entry.\n");
+                } else if(control_input && (!control_input->Ready() || !control_input->Centered() || (control_input->HoldRequired() && control_input->MovingEnabled()))) {
+                    log.Line()<<(unitree_remote_ ? "Center sticks before A/policy entry.\n" : (control_input->HoldRequired() ? "Center sticks and release RB before policy entry.\n" : "Center sticks before policy entry.\n"));
                 } else {
                     policy_target=policy_->DefaultDds();
                     policy_worker->Begin(hardware_ && output_enabled);
@@ -576,13 +576,13 @@ int main(int argc, char** argv) {
     if(hardware && check_joystick) {
         std::cerr<<"Use --check-joystick without --hardware; input diagnostics never connect to DDS.\n";return 1;
     }
-    if(read_only && !joystick_path.empty()) {
-        std::cerr<<"Hardware read-only check does not use a gamepad; omit --joystick.\n";return 1;
+    if(hardware && !joystick_path.empty()) {
+        std::cerr<<"F710 is simulation-only; use --unitree-remote or keyboard for hardware.\n";return 1;
     }
     if(check_joystick) {
         try {
             if(argc!=1) throw std::runtime_error("Use --check-joystick [--joystick DEVICE] without control arguments");
-            g1_gamepad::Device gamepad(joystick_path.empty()?"/dev/input/js0":joystick_path,true);
+            g1_gamepad::Device gamepad(joystick_path.empty()?"/dev/input/js0":joystick_path,true,false);
             std::cout<<"Gamepad: "<<gamepad.Description()<<'\n';
             std::signal(SIGINT,Stop);std::signal(SIGTERM,Stop);
             g1_gamepad::CheckInput(gamepad,stop_requested);return 0;
@@ -617,7 +617,7 @@ int main(int argc, char** argv) {
                   << "Offline inference: --check-policy [model.onnx] [deploy.yaml]\n"
                   << "F710: --joystick /dev/input/js0; input-only check: --check-joystick [--joystick DEVICE]\n"
                   << "Unitree remote: --unitree-remote; Start enables, X reset, A policy, Select stop; direct sticks, no R1 gate.\n"
-                  << "Start enable, A reset, Y run; hold RB + left stick XY/right stick X to move; X zero, B exit.\n";
+                  << "Start enable, X reset, A policy; left stick XY/right stick X to move (simulation only, no RB required); Y zero, B exit.\n";
 #endif
         return argc > max_args ? 1 : 0;
     }
@@ -625,7 +625,7 @@ int main(int argc, char** argv) {
 #ifdef G1_WITH_POLICY
         std::unique_ptr<g1_gamepad::Device> gamepad;
         if(!joystick_path.empty()) {
-            gamepad=std::make_unique<g1_gamepad::Device>(joystick_path,true);
+            gamepad=std::make_unique<g1_gamepad::Device>(joystick_path,true,false);
             std::cout<<"Gamepad: "<<gamepad->Description()<<'\n';
         }
 #endif

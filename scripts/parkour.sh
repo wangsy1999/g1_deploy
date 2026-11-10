@@ -11,7 +11,7 @@ fi
 usage() {
     echo "Usage: $0 check | sim [controller options] | real ROBOT_INTERFACE [controller options]"
     echo 'real automatically starts/reuses camera + depth UDP; --no-auto-camera disables this.'
-    echo 'real starts in dry-run with Unitree remote input. Real output needs --hardware-calibrated and Start.'
+    echo 'real starts in dry-run with Unitree remote input. Press Start for real output handover.'
 }
 (($#)) || { usage; exit 0; }
 mode="$1"; shift

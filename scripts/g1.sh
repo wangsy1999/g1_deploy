@@ -15,7 +15,7 @@ Usage:
   ./g1 parkour check|sim|real ...     Dual-network parkour inference (separate executable)
   ./g1 joystick [DEVICE]             Read-only F710 input check, no DDS
   ./g1 read-only ROBOT_INTERFACE      Subscribe to hardware state, no commands or mode release
-  ./g1 run ROBOT_INTERFACE [DEVICE]   Hardware control, optional F710 jsdev path
+  ./g1 run ROBOT_INTERFACE [remote]   Hardware control, keyboard or Unitree remote
   ./g1 run ROBOT_INTERFACE remote     Unitree: Start enables, X reset, A policy, Select stop; no R1 gate
 
 Example interface: eth0 (use the actual onboard interface, never lo).
@@ -66,7 +66,8 @@ case "$mode" in
             if [[ "$1" == remote ]]; then
                 exec "$controller" --hardware 3 "$robot_interface" 0 "$config" "$model" --unitree-remote
             fi
-            exec "$controller" --hardware 3 "$robot_interface" 0 "$config" "$model" --joystick "$1"
+            echo "Hardware input must be remote or omitted for keyboard; F710 is simulation-only." >&2
+            exit 2
         fi
         exec "$controller" --hardware 3 "$robot_interface" 0 "$config" "$model"
         ;;

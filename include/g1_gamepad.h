@@ -55,10 +55,10 @@ public:
         char action=0;
         switch(code) {
             case BTN_START:action='9';break;
-            case BTN_A:action='p';break;
-            case BTN_Y:action='r';break;
+            case BTN_A:action='r';break;
+            case BTN_Y:action='x';break;
             case BTN_B:stop_=true;break;
-            case BTN_X:action='x';break;
+            case BTN_X:action='p';break;
         }
         if(action) actions_.push_back(action);
     }
@@ -70,6 +70,7 @@ public:
     bool Ready() const {return have_y_ && have_rx_ && (!locomotion_ || have_x_);}
     short RawAxis(unsigned code) const {return code<raw_axes_.size()?raw_axes_[code]:0;}
     bool MovingEnabled() const {return buttons_[BTN_TR];}
+    bool HoldRequired() const {return require_hold_;}
     bool Centered() const {return Deadzone(axes_[ABS_Y])==0 && Deadzone(axes_[ABS_RX])==0 && (!locomotion_ || Deadzone(axes_[ABS_X])==0);}
     std::array<float,2> Sticks() const {return {-Deadzone(axes_[ABS_Y]),-Deadzone(axes_[ABS_RX])};}
     std::array<float,3> Velocity() const {
@@ -79,7 +80,7 @@ public:
     }
     void BeginPolicy() {motion_armed_=true;}
     std::array<float,3> ControlVelocity(char action=0) {
-        if(!MovingEnabled() && Centered()) motion_armed_=true;
+        if((!require_hold_ || !MovingEnabled()) && Centered()) motion_armed_=true;
         if(action=='x'||action=='X') motion_armed_=false;
         return motion_armed_ ? Velocity() : std::array<float,3>{0,0,0};
     }
@@ -102,7 +103,7 @@ struct Layout {
             text<<(i?", ":"")<<i<<":0x"<<std::hex<<button_map[i]<<std::dec;
         text<<"]";return text.str();
     }
-    void Validate(bool locomotion=false) const {
+    void Validate(bool locomotion=false,bool require_hold=true) const {
         if(axes>axis_map.size() || buttons>button_map.size())
             throw std::runtime_error("Gamepad counts exceed mapping capacity: "+Describe());
         auto has_axis=[&](int code) {return std::find(axis_map.begin(),axis_map.begin()+axes,code)!=axis_map.begin()+axes;};
@@ -111,9 +112,10 @@ struct Layout {
         if(!has_axis(ABS_Y)) missing+=" ABS_Y";
         if(!has_axis(ABS_RX)) missing+=" ABS_RX";
         if(locomotion && !has_axis(ABS_X)) missing+=" ABS_X";
-        for(const auto& item:std::array<std::pair<int,const char*>,6>{{
-            {BTN_START,"Start"},{BTN_A,"A"},{BTN_B,"B"},{BTN_X,"X"},{BTN_Y,"Y"},{BTN_TR,"RB"}}})
+        for(const auto& item:std::array<std::pair<int,const char*>,5>{{
+            {BTN_START,"Start"},{BTN_A,"A"},{BTN_B,"B"},{BTN_X,"X"},{BTN_Y,"Y"}}})
             if(!has_button(item.first)) missing+=" "+std::string(item.second);
+        if(require_hold && !has_button(BTN_TR)) missing+=" RB";
         if(!missing.empty()) throw std::runtime_error("Unsupported gamepad layout; missing:"+missing+
             ". "+Describe()+". Check F710 X/D mode and selected device.");
     }
@@ -149,12 +151,12 @@ public:
             text<<(i?", ":"")<<i<<"(0x"<<std::hex<<int(layout_.axis_map[i])<<std::dec<<")="<<state.RawAxis(layout_.axis_map[i]);
         text<<"]";return text.str();
     }
-    explicit Device(const std::string& path,bool locomotion=false):state(locomotion) {
+    explicit Device(const std::string& path,bool locomotion=false,bool require_hold=true):state(locomotion,require_hold) {
         fd_=open(path.c_str(),O_RDONLY|O_NONBLOCK|O_CLOEXEC);
         if(fd_<0) throw std::runtime_error("Cannot open gamepad "+path+": "+std::strerror(errno));
         try {
             layout_=ReadLayout([&](unsigned long request,void* output) {return ioctl(fd_,request,output);});
-            layout_.Validate(locomotion);
+            layout_.Validate(locomotion,require_hold);
             name=layout_.name;
             Poll();
         } catch(...) {close(fd_);fd_=-1;throw;}
