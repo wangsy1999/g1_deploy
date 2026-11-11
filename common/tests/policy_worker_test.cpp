@@ -6,7 +6,7 @@
 using namespace std::chrono_literals;
 using Clock=std::chrono::steady_clock;
 struct Observation {uint64_t sequence=0;};
-using Worker=g1_parkour::PolicyWorker<Observation,int>;
+using Worker=g1_inference::PolicyWorker<Observation,int>;
 void Require(bool condition,const char* message) {
     if(!condition) throw std::runtime_error(message);
 }

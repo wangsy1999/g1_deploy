@@ -13,61 +13,92 @@ C++控制程序不依赖MuJoCo、ROS或Python；可选网页监控需要Python�
 
 ## 可运行程序与使用方法
 
-运行环境为 Linux；下文源码命令在仓库根目录执行，`./g1 ...` 命令在完成 CMake 安装后的 `install/` 目录执行。
+运行环境为 Linux；`./g1 ...` 在源码仓库根目录和完成 CMake 安装后的 `install/` 目录均可执行，使用相同命令。
 先按下文“在G1开发计算机上编译”准备 C++ 依赖并构建。示例中的 `eth0`、机器人 IP、模型路径和外部仿真仓库路径均须按实际环境替换。
 实机 DDS 使用域 `0` 和连接控制板的网卡，仿真使用正数域和 `lo`；两端域号必须相同。
 
 | 程序 / 源码入口 | 功能 | 常用启动方式 |
 | --- | --- | --- |
-| `g1_dwaq` / `apps/dwaq/src/main.cpp` | DreamWaQ 行走策略、姿态复位、硬件只读检查和手柄诊断 | 安装后 `./g1 check`、`./g1 read-only eth0`、`./g1 run eth0 remote` |
-| `g1_parkour` / `apps/parkour/src/parkour.cpp` | 深度编码器与动作网络双 ONNX 推理，支持 MuJoCo 或实机深度输入 | `bash apps/parkour/parkour.sh check\|sim\|real ...`（按需选择一个子命令） |
+| `g1_dwaq` / `apps/dwaq/src/main.cpp` | DreamWaQ 行走策略、姿态复位、硬件只读检查和手柄诊断 | `./g1 dwaq check`、`./g1 dwaq sim`、`./g1 dwaq real eth0` |
+| `g1_parkour` / `apps/parkour/src/main.cpp` | 深度编码器与动作网络双 ONNX 推理，支持 MuJoCo 或实机深度输入 | `./g1 parkour check`、`./g1 parkour sim`、`./g1 parkour real eth0` |
 | `apps/monitor/joint_monitor.py` | 只读关节、IMU、实际/目标曲线及空跑目标网页 | `bash apps/monitor/monitor.sh eth0 0.0.0.0 8765` |
 | `apps/realsense/realsense_web.py` | RealSense 原始/策略深度预览、可选 RGB、本机深度 UDP 转发 | `bash apps/realsense/realsense.sh --host 0.0.0.0 --port 8766` |
 | `apps/parkour/parkour_camera.py` | 管理相机与控制器生命周期，等待新帧、复用兼容服务、保存相机日志 | 由 `bash apps/parkour/parkour.sh real eth0` 自动调用 |
-| `apps/parkour/parkour_sim.py` | 启动外部 MuJoCo 查看器，并加载本项目 Parkour 配置与相机桥接 | `python3 apps/parkour/parkour_sim.py --mujoco-root /path/to/unitree_mujoco` |
+| `apps/simulation/sim.py` | 启动外部 MuJoCo 查看器，并加载本项目 Parkour 配置与相机桥接 | `python3 apps/simulation/sim.py --mujoco-root /path/to/unitree_mujoco` |
 
-`apps/dwaq/g1.sh` 是安装包统一入口，安装为 `g1`；`monitor.sh`、`realsense.sh`、`parkour.sh` 同时支持源码和安装目录，安装后分别命名为 `monitor`、`realsense`、`parkour`。`parkour_sim.py` 不随安装包安装，需从源码运行。
+根目录 `g1` 是两套控制器的统一入口，安装后仍为 `g1`；`apps/dwaq/g1.sh` 作为旧入口转发到它。`monitor.sh`、`realsense.sh`、`parkour.sh` 同时支持源码和安装目录，安装后分别命名为 `monitor`、`realsense`、`parkour`。仿真启动器 `apps/simulation/sim.py` 不随安装包安装，需从源码运行；旧入口 `apps/parkour/parkour_sim.py` 继续兼容。
+
+两套控制器统一采用 `./g1 <程序> <模式> [参数]`：
+
+| 模式 | DWaQ | Parkour |
+| --- | --- | --- |
+| 离线检查 | `./g1 dwaq check` | `./g1 parkour check` |
+| 仿真控制 | `./g1 dwaq sim` | `./g1 parkour sim` |
+| 实机控制 | `./g1 dwaq real eth0` | `./g1 parkour real eth0` |
+
+公共参数放在模式后，例如 `./g1 dwaq sim --domain 2 --reset-seconds 3`。默认读取各自 JSON 中的模型路径；Parkour 的 `--port` 和自动相机管理按其深度输入需求保留。`./g1 run eth0`、`./g1 check` 等旧命令仍兼容。
 
 ### DreamWaQ：检查、空跑与行走
 
 ```bash
-# 以下在 install/ 目录执行
+# 以下在源码根目录或 install/ 目录执行
 ./g1 interfaces                     # 列出网卡和到控制板的路由
-./g1 check                          # 离线加载模型并推理一次，不连接 DDS
+./g1 dwaq check                     # 离线加载模型并推理一次，不连接 DDS
 ./g1 joystick /dev/input/js0         # 只检查 F710 输入，不连接 DDS
 ./g1 read-only eth0                 # 只读 LowState、CRC、机型、电机和 IMU 检查后退出
-./g1 run eth0                       # 键盘控制入口，启动时为空跑
-./g1 run eth0 remote                # 原配遥控器控制入口
+./g1 dwaq real eth0                 # 默认原配遥控器，启动时为空跑
+./g1 run eth0 remote                # 兼容旧写法，效果相同
 ```
 
 键盘空跑：`p → 等待 Target interpolation complete → r`；真实输出：`9 → p → 等待 Holding default pose → r`。
-`w/s` 调整前后速度、`a/d` 调整横向速度、`q/e` 调整转向、`x` 清零，空格或 Ctrl+C 停止。
-原配遥控器对应 `Start` 接管、`X` 复位、`A` 策略、`Select` 停止，摇杆直接控制速度；F710 对应 `Start` 接管、`A` 复位、`Y` 策略、仅仿真使用，直接用摇杆运动、`X` 清零、`B` 停止。
+仿真键盘使用 `w/s` 调整前后速度、`a/d` 调整横向速度、`q/e` 调整转向、`x` 清零；实机使用遥控器摇杆控制速度，空格或 Ctrl+C 停止。
+两套程序实机均默认启用原配遥控器，对应 `Start` 接管、`X` 复位、`A` 策略、`Select` 停止，摇杆直接控制速度；F710 对应 `Start` 接管、`A` 复位、`Y` 策略、仅仿真使用，直接用摇杆运动、`X` 清零、`B` 停止。
 接管会清空空跑目标，必须重新复位再进入策略。具体状态要求和保护见下文与 [硬件说明](docs/HARDWARE.md)。
 
-不安装时可直接运行构建产物；位置参数依次为复位秒数、网卡、DDS 域、配置和模型：
+不安装时可直接运行构建产物；推荐使用与 Parkour 一致的命名参数；旧的位置参数（复位秒数、网卡、DDS 域、配置、模型）仍兼容，但不能与命名的控制参数混用：
 
 ```bash
 ./build/g1_dwaq --check-policy apps/dwaq/config/g1_locomotion.json
-./build/g1_dwaq --hardware-read-only 3 eth0 0 apps/dwaq/config/g1_locomotion.json
-./build/g1_dwaq --hardware 3 eth0 0 apps/dwaq/config/g1_locomotion.json --unitree-remote
+./build/g1_dwaq --hardware-read-only --domain 0 --interface eth0 --config apps/dwaq/config/g1_locomotion.json
+./build/g1_dwaq --hardware --domain 0 --interface eth0 --reset-seconds 3 --config apps/dwaq/config/g1_locomotion.json
 # 外部 DreamWaQ 仿真器已启动时：
-./build/g1_dwaq 3 lo 1 apps/dwaq/config/g1_locomotion.json
+./build/g1_dwaq --sim --domain 1 --interface lo --config apps/dwaq/config/g1_locomotion.json
 ```
+
+### DWaQ 与 Parkour 共用 MuJoCo 仿真
+
+两套控制器使用同一套 Python 环境、G1 29DOF 场景及 SDK2 DDS 接口。先从仓库根目录启动一次：
+
+```bash
+python3 apps/simulation/sim.py --mujoco-root /path/to/unitree_mujoco --domain 1 --port 17200
+```
+
+另开终端，从以下控制器中选择一个：
+
+```bash
+# DWaQ 只读取 DDS，忽略相机观测
+./g1 dwaq sim --domain 1
+# Parkour 同时读取 DDS 和深度观测
+./g1 parkour sim --domain 1 --port 17200
+```
+
+一次只运行一个控制器；切换策略时先停止当前控制器。入口默认发布 Parkour 深度观测，两套程序都可使用；仅运行 DWaQ 时可加 `--no-depth`，避免启动相机采样。仿真入口只修改当前 Python 进程配置，不改外部仓库文件。两套控制器均使用 `9 → p → 等待复位完成 → r` 控制仿真机器人。
+
+Linux 下检测到 `DISPLAY` 时，窗口默认使用 X11（Wayland 会话下通过 XWayland），避免 libdecor 插件加载失败造成标题栏缺失；已有 `PYGLFW_LIBRARY_VARIANT` 设置会保留。可用 `--window-backend x11` 或 `--window-backend wayland` 显式选择，需要重启仿真才能生效。
 
 ### Parkour：离线推理、仿真和实机
 
 ```bash
 # 源码根目录；仅执行双网络推理检查，无需相机或 DDS
-bash apps/parkour/parkour.sh check
+./g1 parkour check
 
 # 仿真终端一：外部仓库需含 simulate_python/parkour_observation.py
-python3 apps/parkour/parkour_sim.py --mujoco-root /path/to/unitree_mujoco --domain 1 --port 17200
+python3 apps/simulation/sim.py --mujoco-root /path/to/unitree_mujoco --domain 1 --port 17200
 # 仿真终端二：域号和 UDP 端口与终端一一致
-bash apps/parkour/parkour.sh sim --domain 1 --port 17200
+./g1 parkour sim --domain 1 --port 17200
 
 # 实机：自动启动/复用相机，等新帧就绪后启动运控，默认空跑
-bash apps/parkour/parkour.sh real eth0
+./g1 parkour real eth0
 ```
 
 安装后分别使用 `./g1 parkour check`、`./g1 parkour sim ...`、`./g1 parkour real eth0 ...`。
@@ -152,7 +183,7 @@ cd /home/unitree/g1_deploy/install
 只读检查通过后启动原配遥控器入口：
 
 ```bash
-./g1 run enP8p1s0 remote
+./g1 run enP8p1s0
 ```
 
 | 场景 | 操作顺序 |
@@ -185,13 +216,24 @@ apps/
   parkour/       Parkour：src/、include/、config/、models/、启动与仿真脚本
   realsense/     相机服务、静态网页、Python 依赖和相机验证工具
   monitor/       关节监控、静态网页、Python 依赖和启动脚本
+  simulation/    DWaQ 与 Parkour 共用的 MuJoCo 启动入口
 common/
-  include/       共用硬件检查、输入、策略线程、日志和 DDS 通道
+  include/       共用键盘/信号、服务释放、复位/阻尼、硬件检查、策略线程和 DDS 通道
   tests/         共用模块测试
 scripts/         整个项目的机器人环境配置工具
 docs/            硬件、Parkour、网页与部署说明
 cmake/           构建信息模板
 ```
+
+两个 C++ 程序使用相同的入口分工：`src/main.cpp` 负责参数解析、帮助和异常出口，`src/options.cpp` 负责命令行选项及校验，`src/controller.cpp` 负责离线检查、初始化和控制循环。对应 `include/g1_*_app.h` 声明选项与运行接口。
+
+运行控制由 `DwaqController` 和 `ParkourController` 管理：`Run()` 只组织读取状态/观测、处理输入、更新策略、发布目标和等待下一周期。接管、复位、策略进入、阻尼退出分别在独立方法中实现。会话数据归控制器所有，策略线程在目标与观测缓冲区销毁前结束。姿态接近检查、输入回中检查、复位目标生成及位置/PD 指令填充统一使用 `g1_control_targets.h`，输入和增益在填充边界均使用 DDS 关节顺序。
+
+两套程序统一等待有效启动数据最多 10 秒，且优先处理停止，其次处理遥控器事件，最后处理键盘事件。输出已经使能时忽略重复接管，不会重新释放运动服务或清空正在运行的策略。
+
+推理工具集中在 `common/include/`：`g1_config_utils.h` 读取配置数组与解析相对路径，`g1_onnx_utils.h` 校验和执行 ONNX 网络，`g1_observation_history.h` 更新历史缓存并按观测项排列输入。两套策略仅保留各自的观测、网络组合和动作转换；策略线程统一使用 `g1_inference::PolicyWorker`。
+
+控制器还共用 `g1_loop_scheduler.h`（周期调度与跳过错过周期）、`g1_dds_state_cache.h`（DDS 订阅、带时间戳快照及故障锁存）、`g1_monitor_publisher.h`（使能状态、实际目标和空跑预览）、`g1_joint_mapping.h`（关节名称映射、编号校验与顺序转换）。状态验证规则和超时参数仍由各自程序提供。
 
 程序专属文件放在对应的 `apps/<程序>/` 内；跨程序共用文件放在 `common/`，避免复制多份。
 DWaQ 的策略与硬件保护参数位于 `apps/dwaq/config/g1_locomotion.json`；Parkour 的策略与硬件保护参数位于 `apps/parkour/config/g1_parkour.json`。两套程序分别维护自己的配置。
@@ -288,7 +330,7 @@ cpack -G TGZ
 
 ## 控制运行
 
-### 不按 9 即为空跑
+### 不按 Start / 9 即为空跑
 
 ```bash
 cd install
@@ -296,7 +338,7 @@ cd install
 ```
 
 程序默认空跑，读取真实 LowState；不按 `9`，直接按 `p` 预览复位，等待 `Target interpolation complete` 后按 `r` 执行策略推理。
-`w/s`、`a/d`、`q/e` 和 `x` 调整或清零预览速度；空格或 Ctrl+C 退出。
+实机速度由原配遥控器摇杆控制；仿真使用 `w/s`、`a/d`、`q/e` 和 `x` 调整或清零速度；空格或 Ctrl+C 退出。
 按下 `9` 才申请接管并打开真实输出。在此之前不创建 `rt/lowcmd` 发布器、
 不调用 MotionSwitcher、退出时也不发阻尼指令。预览目标使用独立的 `rt/g1/dry_run_target` 遥测话题，
 网页标为“空跑”，本程序 Enable 显示 OFF。空跑不改变机器人电源、官方服务或其他程序的输出状态。
@@ -328,10 +370,10 @@ CRC、机型、有限关节/IMU数据和状态新鲜度仍必须满足读取要�
 | `9` | 确认释放原运动服务后接管，进入阻尼等待 |
 | `p` | 未按9：预览复位；按9后：从实测角度平滑复位 |
 | `r` | 复位完成后进入策略；真实输出还要求实测角接近默认姿态，初始速度0 |
-| `w/s` | 前后速度±0.1m/s |
-| `a/d` | 横向速度±0.1m/s |
-| `q/e` | 转向速度±0.1rad/s |
-| `x` | 三维速度清零 |
+| `w/s` | 仿真键盘前后速度±0.1m/s；实机使用遥控器摇杆 |
+| `a/d` | 仿真键盘横向速度±0.1m/s |
+| `q/e` | 仿真键盘转向速度±0.1rad/s |
+| `x` | 仿真键盘三维速度清零 |
 | 空格 / Ctrl+C | 停止退出；仅在已接管后发送约0.5秒阻尼命令 |
 
 按`9 → p → 等待Holding default pose → r`操作。推理中按`p`返回复位。
@@ -341,11 +383,11 @@ CRC、机型、有限关节/IMU数据和状态新鲜度仍必须满足读取要�
 
 ```bash
 cd /home/unitree/g1_deploy/install
-./g1 run enP8p1s0 remote
+./g1 run enP8p1s0
 ```
 
 原配遥控器使用 LowState 内的 `wireless_remote`，不需要 USB 接收器或 `/dev/input/js0`。
-真机使用原配遥控器或键盘；不加 `remote` 时使用键盘，F710 仅用于仿真。
+DWaQ 和 Parkour 实机控制均默认使用原配遥控器；DWaQ 不再需要追加 `remote` 或 `--unitree-remote`，旧写法仍兼容。键盘保留接管、复位、策略启停和空格/Ctrl+C 停止操作；实机速度由遥控器摇杆控制，F710 仅用于仿真。
 
 | 输入 | 行为 |
 | --- | --- |
@@ -365,8 +407,7 @@ Select即使启动时按住也停止，且优先于其他按钮。B和Y不映射
 空跑顺序为`X → 等待Target interpolation complete → A`，全程不按Start或键盘9。
 空跑后按Start会清除预览和策略状态，必须重新X复位。键盘空格/Ctrl+C仍可退出。
 
-原配遥控器模式将硬件检查中的遥控停止键从A改为Select，A才能进入策略；
-未选择此模式时仍保留原配遥控器A停止的旧行为。
+实机控制默认将遥控停止键设为 Select，A 用于进入策略。只读检查不启用遥控控制。
 LowState超时、无效轴或软件故障会停止，但LowState持续更新不等于遥控无线链路有心跳；
 当前无法保证识别固件重复旧遥控值时的无线失联。
 
@@ -384,7 +425,7 @@ LowState超时、无效轴或软件故障会停止，但LowState持续更新不�
 Start使能、X复位、A进入策略；仿真进入前摇杆居中，进入后直接用摇杆运动，无需按住RB。
 DreamWaQ左杆前后控制前后速度、左右控制横移，右杆左右控制转向；Parkour仅支持前向和转向。
 摇杆回中归零，Y清零并锁定运动，摇杆回中后可重新运动；B停止并退出。
-真机使用原配遥控器或键盘，不支持 F710。
+真机默认使用原配遥控器，不支持 F710。
 速度按JSON范围缩放：默认前后`[-0.6,1]m/s`、横向`[-0.5,0.5]m/s`、转向`[-1.57,1.57]rad/s`。
 输入诊断显示每个原始轴值，左杆前后为`ABS_Y (0x1)`；若只变化`0x11`，检查MODE状态。
 手柄USB读取失败触发停止，但没有无线链路心跳，不能保证识别接收器仍在线时的无线失联。
@@ -394,8 +435,8 @@ DreamWaQ左杆前后控制前后速度、左右控制横移，右杆左右控制
 ```bash
 ./build/g1_dwaq --check-policy
 ./build/g1_dwaq --check-joystick --joystick /dev/input/js0
-./build/g1_dwaq --hardware-read-only 3 eth0 0 apps/dwaq/config/g1_locomotion.json
-./build/g1_dwaq 3 lo 1 apps/dwaq/config/g1_locomotion.json --joystick /dev/input/js0
+./build/g1_dwaq --hardware-read-only --domain 0 --interface eth0 --config apps/dwaq/config/g1_locomotion.json
+./build/g1_dwaq --sim --domain 1 --interface lo --config apps/dwaq/config/g1_locomotion.json --joystick /dev/input/js0
 ```
 
 ## 验证范围

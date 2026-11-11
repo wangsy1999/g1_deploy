@@ -12,7 +12,7 @@
 #include <thread>
 #include <utility>
 
-namespace g1_parkour {
+namespace g1_inference {
 // Single owner of policy history and inference. Mailboxes only hold snapshots;
 // the mutex is never held while resetting, preprocessing or running the model.
 template<class Observation, class Target>
@@ -148,4 +148,4 @@ public:
         return result_;
     }
 };
-} // namespace g1_parkour
+} // namespace g1_inference

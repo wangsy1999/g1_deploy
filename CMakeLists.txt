@@ -32,12 +32,18 @@ if(NOT ORT_INCLUDE OR NOT ORT_LIBRARY)
     message(FATAL_ERROR "ONNXRUNTIME_ROOT must contain include/onnxruntime_cxx_api.h and lib/libonnxruntime.so")
 endif()
 
-add_executable(g1_dwaq "${REPOSITORY_ROOT}/apps/dwaq/src/main.cpp")
+add_executable(g1_dwaq
+    "${REPOSITORY_ROOT}/apps/dwaq/src/main.cpp"
+    "${REPOSITORY_ROOT}/apps/dwaq/src/options.cpp"
+    "${REPOSITORY_ROOT}/apps/dwaq/src/controller.cpp")
 target_include_directories(g1_dwaq PRIVATE "${REPOSITORY_ROOT}/apps/dwaq/include" "${COMMON_INCLUDE}" "${ORT_INCLUDE}")
 target_link_libraries(g1_dwaq PRIVATE unitree_sdk2 Boost::boost yaml-cpp "${ORT_LIBRARY}" Threads::Threads)
 target_compile_definitions(g1_dwaq PRIVATE G1_WITH_POLICY
     G1_POLICY_DEFAULT_CONFIG="${REPOSITORY_ROOT}/apps/dwaq/config/g1_locomotion.json")
-add_executable(g1_parkour "${REPOSITORY_ROOT}/apps/parkour/src/parkour.cpp")
+add_executable(g1_parkour
+    "${REPOSITORY_ROOT}/apps/parkour/src/main.cpp"
+    "${REPOSITORY_ROOT}/apps/parkour/src/options.cpp"
+    "${REPOSITORY_ROOT}/apps/parkour/src/controller.cpp")
 target_include_directories(g1_parkour PRIVATE "${REPOSITORY_ROOT}/apps/parkour/include" "${COMMON_INCLUDE}" "${ORT_INCLUDE}" ${OpenCV_INCLUDE_DIRS})
 target_link_libraries(g1_parkour PRIVATE unitree_sdk2 Boost::boost yaml-cpp "${ORT_LIBRARY}" ${OpenCV_LIBS} Threads::Threads)
 target_compile_definitions(g1_parkour PRIVATE
@@ -67,7 +73,7 @@ install(DIRECTORY "${ONNXRUNTIME_ROOT}/lib/" DESTINATION lib
 foreach(notice IN ITEMS LICENSE ThirdPartyNotices.txt Privacy.md VERSION_NUMBER)
     install(FILES "${ONNXRUNTIME_ROOT}/${notice}" DESTINATION licenses/onnxruntime OPTIONAL)
 endforeach()
-install(PROGRAMS "${REPOSITORY_ROOT}/apps/dwaq/g1.sh" DESTINATION . RENAME g1)
+install(PROGRAMS "${REPOSITORY_ROOT}/g1" DESTINATION .)
 install(PROGRAMS "${REPOSITORY_ROOT}/apps/monitor/monitor.sh" DESTINATION . RENAME monitor)
 install(FILES "${REPOSITORY_ROOT}/apps/monitor/joint_monitor.py" "${REPOSITORY_ROOT}/apps/monitor/requirements.txt" DESTINATION apps/monitor)
 install(FILES "${REPOSITORY_ROOT}/apps/monitor/static/joint_monitor.html" DESTINATION apps/monitor/static)
@@ -84,6 +90,32 @@ set(CPACK_PACKAGE_FILE_NAME "g1-deploy-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCE
 include(CPack)
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(g1_control_components_test common/tests/control_components_test.cpp)
+    target_include_directories(g1_control_components_test PRIVATE "${COMMON_INCLUDE}")
+    target_link_libraries(g1_control_components_test PRIVATE unitree_sdk2 yaml-cpp Threads::Threads)
+    add_test(NAME control_components COMMAND g1_control_components_test)
+    set_tests_properties(control_components PROPERTIES TIMEOUT 10)
+    add_executable(g1_control_options_test common/tests/control_options_test.cpp
+        apps/dwaq/src/options.cpp apps/parkour/src/options.cpp)
+    target_include_directories(g1_control_options_test PRIVATE "${COMMON_INCLUDE}"
+        "${REPOSITORY_ROOT}/apps/dwaq/include" "${REPOSITORY_ROOT}/apps/parkour/include")
+    target_compile_definitions(g1_control_options_test PRIVATE
+        G1_POLICY_DEFAULT_CONFIG="${REPOSITORY_ROOT}/apps/dwaq/config/g1_locomotion.json"
+        G1_PARKOUR_DEFAULT_CONFIG="${REPOSITORY_ROOT}/apps/parkour/config/g1_parkour.json")
+    add_test(NAME control_options COMMAND g1_control_options_test)
+    add_executable(g1_inference_utils_test common/tests/inference_utils_test.cpp)
+    target_include_directories(g1_inference_utils_test PRIVATE "${COMMON_INCLUDE}" "${ORT_INCLUDE}")
+    target_link_libraries(g1_inference_utils_test PRIVATE yaml-cpp "${ORT_LIBRARY}")
+    target_compile_definitions(g1_inference_utils_test PRIVATE
+        G1_TEST_ENCODER="${REPOSITORY_ROOT}/apps/parkour/models/0-depth_encoder.onnx"
+        G1_TEST_DWAQ_MODEL="${REPOSITORY_ROOT}/apps/dwaq/models/policy.onnx")
+    add_test(NAME inference_utils COMMAND g1_inference_utils_test)
+    set_tests_properties(inference_utils PROPERTIES TIMEOUT 10)
+    add_executable(g1_control_helpers_test common/tests/control_helpers_test.cpp)
+    target_include_directories(g1_control_helpers_test PRIVATE "${COMMON_INCLUDE}")
+    target_link_libraries(g1_control_helpers_test PRIVATE unitree_sdk2)
+    add_test(NAME control_helpers COMMAND g1_control_helpers_test)
+    set_tests_properties(control_helpers PROPERTIES TIMEOUT 5)
     add_executable(g1_unitree_remote_test common/tests/unitree_remote_test.cpp)
     target_include_directories(g1_unitree_remote_test PRIVATE "${COMMON_INCLUDE}")
     target_link_libraries(g1_unitree_remote_test PRIVATE Threads::Threads)

@@ -61,13 +61,15 @@ bash apps/realsense/realsense.sh --mock --host 127.0.0.1 --port 8766
 该模式明确显示 `SYNTHETIC TEST`，禁止同时指定 `--depth-port`，不能用于实机策略。
 安装包入口为 `./realsense ...` 或 `./g1 realsense ...`。
 
-## 仿真：使用源仓库的 MuJoCo 相机
+## 仿真：DWaQ 与 Parkour 共用 MuJoCo 环境
 
 终端一（Python 环境需要源仓库的 MuJoCo、NumPy、pygame、unitree_sdk2py）：
 
 ```bash
-python apps/parkour/parkour_sim.py --mujoco-root /path/to/unitree_mujoco --domain 1 --port 17200
+python apps/simulation/sim.py --mujoco-root /path/to/unitree_mujoco --domain 1 --port 17200
 ```
+
+同一仿真也支持 `./build/g1_dwaq --sim --domain 1 --interface lo`；一次只运行一个控制器。旧入口 `apps/parkour/parkour_sim.py` 保持兼容。仅运行 DWaQ 时可加 `--no-depth`。
 
 启动器只覆盖当前 Python 进程配置，不修改外部仓库。源仓库用训练相机内外参进行 MuJoCo 射线深度采样，
 每个仿真时刻把关节、torso 角速度、重力、torso 高度和 36×64 深度打包到 `127.0.0.1:17200`。

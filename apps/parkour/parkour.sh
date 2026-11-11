@@ -9,19 +9,24 @@ else
     controller="$root_dir/build/g1_parkour"
 fi
 usage() {
-    echo "Usage: $0 check | sim [controller options] | real ROBOT_INTERFACE [controller options]"
+    echo "Usage: $0 check [options] | sim [options] | real ROBOT_INTERFACE [options]"
     echo 'real automatically starts/reuses camera + depth UDP; --no-auto-camera disables this.'
     echo 'real starts in dry-run with Unitree remote input. Press Start for real output handover.'
 }
 (($#)) || { usage; exit 0; }
 mode="$1"; shift
+if [[ "$mode" == help || "$mode" == --help ]]; then
+    usage
+    if [[ -x "$controller" ]]; then "$controller" --help; fi
+    exit 0
+fi
 [[ -x "$controller" ]] || { echo "Missing executable: $controller" >&2; exit 1; }
 export LD_LIBRARY_PATH="$root_dir/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 common=(--config "$root_dir/apps/parkour/config/g1_parkour.json")
 case "$mode" in
     check) exec "$controller" "${common[@]}" --check-policy "$@" ;;
     sim) exec "$controller" "${common[@]}" --sim --domain 1 --interface lo "$@" ;;
-    real)
+    real|run)
         (($#)) || { usage >&2; exit 2; }
         interface="$1"; shift
         auto_camera=1

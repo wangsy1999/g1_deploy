@@ -1,5 +1,7 @@
 #pragma once
 
+#include "g1_config_utils.h"
+
 #include <array>
 #include <algorithm>
 #include <cstdint>
@@ -61,16 +63,8 @@ struct Limits {
     explicit Limits(const YAML::Node& root) {
         const auto cfg = root["hardware"];
         if (!cfg) throw std::runtime_error("Missing hardware configuration");
-        auto read = [&](const char* name, auto& result) {
-            const auto node = cfg[name];
-            if (!node.IsSequence() || node.size() != result.size())
-                throw std::runtime_error(std::string("Expected 29 hardware ")+name+" values in DDS order");
-            for (int i = 0; i < 29; ++i) {
-                result[i] = node[i].as<float>();
-                if (!std::isfinite(result[i])) throw std::runtime_error("Non-finite hardware limit");
-            }
-        };
-        read("joint_lower", lower); read("joint_upper", upper);
+        lower = g1_config::ReadArray<float, 29>(cfg["joint_lower"]);
+        upper = g1_config::ReadArray<float, 29>(cfg["joint_upper"]);
         limit_target_position = cfg["limit_target_position"] ? cfg["limit_target_position"].as<bool>() : false;
         timeout_ms = cfg["state_timeout_ms"].as<double>();
         max_tilt = cfg["max_tilt_rad"].as<double>();

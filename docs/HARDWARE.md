@@ -32,14 +32,12 @@
 
 ## 停止行为
 
-空格、Ctrl+C、SIGHUP/SIGTERM、原配遥控器 Select（remote 模式）、输入读取失败或软件检查故障触发停止。
+空格、Ctrl+C、SIGHUP/SIGTERM、原配遥控器 Select（实机控制默认启用）、输入读取失败或软件检查故障触发停止。
 已接管后发送mode=1、Kp=0、tau=0、dq=0、Kd=1的阻尼命令约0.5秒，然后退出。
 DDS发送成功不代表控制板已确认执行；网络故障、SIGKILL、进程卡死或断电无法保证软件退出路径执行。
 
-机器人原配遥控器A按钮在本项目中为阻尼停止请求，依据
-[官方遥控数据布局](https://github.com/unitreerobotics/unitree_sdk2/blob/main/example/g1/low_level/gamepad.hpp)解析。
-F710 仅用于仿真；真机支持键盘和 LowState 中的原配遥控器输入。
-显式使用`./g1 run <网卡> remote`时，原配遥控器映射覆盖上述A停止设置：
+DWaQ 和 Parkour 实机控制默认使用 LowState 中的原配遥控器，F710 仅用于仿真。
+`./g1 run <网卡>` 默认与旧写法 `./g1 run <网卡> remote` 相同：
 Start接管、X复位、A策略、Select停止退出，摇杆直接控制速度，不需要按住R1。
 该模式的硬件停止位检查使用Select；启动时按住的Start/X/A不触发，Select始终停止。
 这不是对机器人固件硬件急停按键的声明。退出后不会自动恢复原官方运动服务。
