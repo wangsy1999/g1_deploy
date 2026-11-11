@@ -1,4 +1,5 @@
 {
+  "reset_seconds": 3.0,
   "policy_path": "../models/policy.onnx",
   "joint_ids_map": [
     0,

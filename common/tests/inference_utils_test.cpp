@@ -14,6 +14,11 @@ template<class Function> void MustFail(Function function) {
     Require(failed, "Invalid input was accepted");
 }
 void CheckConfiguration() {
+    Require(g1_config::ReadResetSeconds(YAML::Load("{}")) == 3.0, "Default reset duration changed");
+    Require(g1_config::ReadResetSeconds(YAML::Load("reset_seconds: 4.5")) == 4.5, "JSON reset duration ignored");
+    for (const auto* value : {"0", "-1", ".nan", ".inf", "invalid"}) {
+        MustFail([&] { g1_config::ReadResetSeconds(YAML::Load(std::string("reset_seconds: ") + value)); });
+    }
     const auto node = YAML::Load("[1, 2, 3]");
     Require(g1_config::ReadArray<float, 3>(node) == std::array<float, 3>{1, 2, 3}, "Array values changed");
     MustFail([&] { g1_config::ReadArray<float, 2>(node); });

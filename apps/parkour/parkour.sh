@@ -15,6 +15,13 @@ usage() {
 }
 (($#)) || { usage; exit 0; }
 mode="$1"; shift
+# Reject removed overrides before starting a camera service.
+for argument in "$@"; do
+    case "$argument" in
+        --model|--model-dir|--limits|--unitree-remote|--reset-seconds)
+            echo "Removed option: $argument; use the program JSON configuration." >&2; exit 2 ;;
+    esac
+done
 if [[ "$mode" == help || "$mode" == --help ]]; then
     usage
     if [[ -x "$controller" ]]; then "$controller" --help; fi
@@ -29,6 +36,9 @@ case "$mode" in
     real|run)
         (($#)) || { usage >&2; exit 2; }
         interface="$1"; shift
+        if [[ "${1:-}" == remote ]]; then
+            echo 'The remote argument was removed; hardware uses the Unitree remote by default.' >&2; exit 2
+        fi
         auto_camera=1
         web_port=8766
         depth_port=17201

@@ -33,12 +33,86 @@ struct State {
 
 class Policy {
 public:
-    Policy(const std::string& model, const std::string& config)
+    explicit Policy(const std::string& config)
         : env_(ORT_LOGGING_LEVEL_WARNING, "g1_locomotion") {
         const auto cfg = YAML::LoadFile(config);
-        const auto model_path = model.empty()
-            ? g1_config::ResolvePath(config, cfg["policy_path"].as<std::string>())
-            : model;
+        const auto model_path = g1_config::ResolvePath(config, cfg["policy_path"].as<std::string>());
+        // 先读懂模型约定：关节顺序、动作转换、观测布局和速度范围。
+        LoadJointParameters(cfg);
+        LoadActionParameters(cfg);
+        LoadObservationParameters(cfg);
+        LoadVelocityLimits(cfg);
+        LoadNetwork(model_path);
+        Reset();
+    }
+
+    void Reset() { last_action_.fill(0); initialized_ = false; }
+    const char* Interface() const {
+        return input_names_.size() == 2 ? "float32 [1,96] + [1,480] -> [1,29]"
+                                       : "float32 [1,480] -> [1,29]";
+    }
+    Joints DefaultDds() const {
+        return g1_joints::ToMotorOrder(default_, ids_);
+    }
+    void ClampVelocity(std::array<float, 3>& command) const {
+        for (int i = 0; i < 3; ++i) command[i] = std::clamp(command[i], limits_[i][0], limits_[i][1]);
+    }
+    std::array<float,3> GamepadVelocity(const std::array<float,3>& normalized) const {
+        std::array<float,3> result{};
+        for(int i=0;i<3;++i) {
+            if(!std::isfinite(normalized[i])) throw std::runtime_error("Invalid gamepad velocity");
+            const float value=std::clamp(normalized[i],-1.f,1.f);
+            result[i]=value*(value<0 ? -limits_[i][0] : limits_[i][1]);
+        }
+        return result;
+    }
+
+    // 把当前状态整理成 96 个数，再更新五帧历史。
+    // 输入模型时，按观测项排列；每一项内部从旧帧排到新帧（训练时的约定）。
+    std::array<float, kObservation> Observe(const State& state, const std::array<float, 3>& velocity) {
+        const auto frame = BuildObservationFrame(state, velocity);
+        UpdateHistory(frame);
+        return PackObservationHistory();
+    }
+
+    // 每次推理只做三件事：整理机器人状态 → 预测动作 → 换算电机关节目标。
+    Joints Step(const State& state, const std::array<float, 3>& velocity) {
+        // 1. 整理当前状态和期望速度，连同最近五帧历史一起准备好。
+        auto observation_history = Observe(state, velocity);
+        // 2. 让模型预测 29 个关节的动作值。
+        const auto predicted_actions = PredictActions(observation_history);
+        // 3. 把动作值换算成电机目标角度，并记住动作供下次使用。
+        return ProcessActions(predicted_actions);
+    }
+
+    // 网络给出的是动作值；按配置缩放、加偏置、限幅后，才是 DDS 顺序的目标角度。
+    // 同时记录本次动作，供下一次推理作为“上一次动作”输入。
+    Joints ProcessActions(const Joints& actions) {
+        Joints target{};
+        for (int i = 0; i < kJoints; ++i) {
+            if (!std::isfinite(actions[i])) throw std::runtime_error("Non-finite policy action");
+            const float applied = std::clamp(actions[i], -raw_clip_, raw_clip_);
+            // 按训练配置决定下次反馈原始动作还是限幅后的动作。
+            last_action_[i] = clip_action_feedback_ ? applied : actions[i];
+            target[ids_[i]] = offset_[i] + scale_[i]*applied;
+            if (!std::isfinite(target[ids_[i]])) throw std::runtime_error("Non-finite policy target");
+            target[ids_[i]] = std::clamp(target[ids_[i]], target_clip_[i][0], target_clip_[i][1]);
+        }
+        return target;
+    }
+
+    Joints kp{}, kd{};
+    double dt = 0.02;
+private:
+    // 一帧的排列：角速度(3)、重力(3)、速度指令(3)、关节位置(29)、关节速度(29)、上次动作(29)。
+    static constexpr int kAngularVelocityOffset = 0;
+    static constexpr int kGravityOffset = 3;
+    static constexpr int kCommandOffset = 6;
+    static constexpr int kJointPositionOffset = 9;
+    static constexpr int kJointVelocityOffset = kJointPositionOffset + kJoints;
+    static constexpr int kPreviousActionOffset = kJointVelocityOffset + kJoints;
+
+    void LoadJointParameters(const YAML::Node& cfg) {
         ids_ = g1_config::ReadArray<int, kJoints>(cfg["joint_ids_map"]);
         g1_joints::ValidatePermutation(ids_);
         default_ = g1_config::ReadArray<float, kJoints>(cfg["default_joint_pos"]);
@@ -48,6 +122,9 @@ public:
             if (kp[i] < 0 || kd[i] < 0) throw std::runtime_error("Negative PD gains");
         dt = cfg["step_dt"].as<double>();
         if (!std::isfinite(dt) || dt < 0.002) throw std::runtime_error("Invalid policy step_dt");
+    }
+
+    void LoadActionParameters(const YAML::Node& cfg) {
         const auto action = cfg["actions"]["JointPositionAction"];
         scale_ = g1_config::ReadArray<float, kJoints>(action["scale"]);
         offset_ = g1_config::ReadArray<float, kJoints>(action["offset"]);
@@ -67,6 +144,9 @@ public:
                     throw std::runtime_error("Reversed joint target clip bounds");
             }
         }
+    }
+
+    void LoadObservationParameters(const YAML::Node& cfg) {
         const auto observations = cfg["observations"];
         const std::array<const char*, 6> names{"base_ang_vel", "projected_gravity",
             "velocity_commands", "joint_pos_rel", "joint_vel_rel", "last_action"};
@@ -91,6 +171,9 @@ public:
             }
             ++term;
         }
+    }
+
+    void LoadVelocityLimits(const YAML::Node& cfg) {
         const auto ranges = cfg["commands"]["base_velocity"]["ranges"];
         const std::array<const char*, 3> velocity_names{"lin_vel_x", "lin_vel_y", "ang_vel_z"};
         for (int i = 0; i < 3; ++i) {
@@ -98,6 +181,9 @@ public:
             if (limits_[i][0] > 0 || limits_[i][1] < 0)
                 throw std::runtime_error("Command limits must include zero");
         }
+    }
+
+    void LoadNetwork(const std::string& model_path) {
         auto options = g1_onnx::CpuSessionOptions();
         options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
         session_ = std::make_unique<Ort::Session>(env_, model_path.c_str(), options);
@@ -123,84 +209,32 @@ public:
         if (g1_onnx::TensorShape(*session_, false, 0) != std::vector<int64_t>({1, kJoints}))
             throw std::runtime_error("Expected float32 output [1,29]");
         output_name_ = g1_onnx::TensorName(*session_, false, 0);
-        Reset();
     }
 
-    void Reset() { last_action_.fill(0); initialized_ = false; }
-    const char* Interface() const {
-        return input_names_.size() == 2 ? "float32 [1,96] + [1,480] -> [1,29]"
-                                       : "float32 [1,480] -> [1,29]";
-    }
-    Joints DefaultDds() const {
-        return g1_joints::ToMotorOrder(default_, ids_);
-    }
-    void ClampVelocity(std::array<float, 3>& command) const {
-        for (int i = 0; i < 3; ++i) command[i] = std::clamp(command[i], limits_[i][0], limits_[i][1]);
-    }
-    std::array<float,3> GamepadVelocity(const std::array<float,3>& normalized) const {
-        std::array<float,3> result{};
-        for(int i=0;i<3;++i) {
-            if(!std::isfinite(normalized[i])) throw std::runtime_error("Invalid gamepad velocity");
-            const float value=std::clamp(normalized[i],-1.f,1.f);
-            result[i]=value*(value<0 ? -limits_[i][0] : limits_[i][1]);
-        }
-        return result;
-    }
-
-    // Term-major history, oldest -> newest within each term (Isaac Lab default).
-    std::array<float, kObservation> Observe(const State& state, const std::array<float, 3>& velocity) {
-        const auto frame = BuildObservationFrame(state, velocity);
-        UpdateHistory(frame);
-        return PackObservationHistory();
-    }
-
-    // One policy tick: scaled observations/history -> raw actions -> DDS joint targets.
-    Joints Step(const State& state, const std::array<float, 3>& velocity) {
-        auto observation = Observe(state, velocity);
-        const auto actions = RunNetwork(observation);
-        return ProcessActions(actions);
-    }
-
-    Joints ProcessActions(const Joints& actions) {
-        Joints target{};
-        for (int i = 0; i < kJoints; ++i) {
-            if (!std::isfinite(actions[i])) throw std::runtime_error("Non-finite policy action");
-            const float applied = std::clamp(actions[i], -raw_clip_, raw_clip_);
-            // RSL-RL's environment wrapper clips actions before last_action feedback.
-            last_action_[i] = clip_action_feedback_ ? applied : actions[i];
-            target[ids_[i]] = offset_[i] + scale_[i]*applied;
-            if (!std::isfinite(target[ids_[i]])) throw std::runtime_error("Non-finite policy target");
-            target[ids_[i]] = std::clamp(target[ids_[i]], target_clip_[i][0], target_clip_[i][1]);
-        }
-        return target;
-    }
-
-    Joints kp{}, kd{};
-    double dt = 0.02;
-private:
     std::array<float, kFrame> BuildObservationFrame(const State& state,
                                                   const std::array<float, 3>& velocity) const {
         std::array<float, kFrame> frame{};
+        // 先归一化姿态四元数，再计算机器人自身坐标系中的重力方向。
         float norm = 0;
         for (float v : state.quaternion) norm += v*v;
         if (!std::isfinite(norm) || norm < 1e-8f) throw std::runtime_error("Invalid IMU quaternion");
         norm = std::sqrt(norm);
         const float w = state.quaternion[0]/norm, x = state.quaternion[1]/norm;
         const float y = state.quaternion[2]/norm, z = state.quaternion[3]/norm;
-        for (int i = 0; i < 3; ++i) frame[i] = state.omega[i];
-        frame[3] = 2*(w*y-x*z);
-        frame[4] = -2*(y*z+w*x);
-        frame[5] = 2*(x*x+y*y)-1;
-        for (int i = 0; i < 3; ++i) frame[6+i] = velocity[i];
+        for (int i = 0; i < 3; ++i) frame[kAngularVelocityOffset+i] = state.omega[i];
+        frame[kGravityOffset] = 2*(w*y-x*z);
+        frame[kGravityOffset+1] = -2*(y*z+w*x);
+        frame[kGravityOffset+2] = 2*(x*x+y*y)-1;
+        for (int i = 0; i < 3; ++i) frame[kCommandOffset+i] = velocity[i];
         for (int i = 0; i < kJoints; ++i) {
-            frame[9+i] = state.q[ids_[i]] - default_[i];
-            frame[38+i] = state.dq[ids_[i]];
-            frame[67+i] = last_action_[i];
+            frame[kJointPositionOffset+i] = state.q[ids_[i]] - default_[i];
+            frame[kJointVelocityOffset+i] = state.dq[ids_[i]];
+            frame[kPreviousActionOffset+i] = last_action_[i];
         }
         for (int i = 0; i < kFrame; ++i) {
             frame[i] *= obs_scale_[i];
             if (!std::isfinite(frame[i])) throw std::runtime_error("Non-finite observation");
-            // Clip the scaled observation before model input.
+            // 和训练一致：先缩放，再限幅。
             frame[i] = std::clamp(frame[i], obs_clip_[i][0], obs_clip_[i][1]);
         }
         return frame;
@@ -218,7 +252,7 @@ private:
         return observation;
     }
 
-    Joints RunNetwork(std::array<float, kObservation>& observation) {
+    Joints PredictActions(std::array<float, kObservation>& observation) {
         std::vector<g1_onnx::InputTensor> inputs;
         for (std::size_t i = 0; i < input_names_.size(); ++i) {
             float* data = input_sizes_[i] == kFrame ? current_frame_.data() : observation.data();

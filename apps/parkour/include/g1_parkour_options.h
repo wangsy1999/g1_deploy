@@ -11,12 +11,10 @@ struct Options : g1_control::RuntimeOptions {
     std::string program;
     int help_exit_code = 0;
     int port = 0;
-    std::string models;
-    std::string limits_config;
     std::string joystick;
 };
 
+// 实现在 src/options.cpp：解析启动参数并检查组合是否合法。
 Options ParseOptions(int argc, char** argv);
 void PrintUsage(const std::string& program);
-int Run(const Options& options);
 }  // namespace g1_parkour_app

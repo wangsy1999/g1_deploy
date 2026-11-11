@@ -1,5 +1,5 @@
-#include "g1_dwaq_app.h"
-#include "g1_parkour_app.h"
+#include "g1_dwaq_options.h"
+#include "g1_parkour_options.h"
 #include <initializer_list>
 #include <iostream>
 #include <stdexcept>
@@ -24,7 +24,7 @@ template<class Function> void Reject(Function function) {
     Require(failed, "Invalid arguments accepted");
 }
 void SameRuntime(const g1_control::RuntimeOptions& a, const g1_control::RuntimeOptions& b) {
-    Require(a.hardware == b.hardware && a.reset_seconds == b.reset_seconds && a.domain == b.domain &&
+    Require(a.hardware == b.hardware && a.domain == b.domain &&
             a.interface == b.interface && a.config == b.config, "Runtime options differ");
 }
 std::string HardwareInterface() {
@@ -40,14 +40,19 @@ std::string HardwareInterface() {
 }  // namespace
 int main() {
     try {
-        const auto dwaq = Dwaq({"--sim", "--domain", "2", "--interface", "lo", "--config", "test.json", "--reset-seconds", "4"});
-        const auto parkour = Parkour({"--sim", "--domain", "2", "--interface", "lo", "--config", "test.json", "--reset-seconds", "4"});
+        const auto dwaq = Dwaq({"--sim", "--domain", "2", "--interface", "lo", "--config", "test.json"});
+        const auto parkour = Parkour({"--sim", "--domain", "2", "--interface", "lo", "--config", "test.json"});
         SameRuntime(dwaq, parkour);
-        SameRuntime(dwaq, Dwaq({"4", "lo", "2", "test.json"}));
-        Require(!dwaq.unitree_remote, "Simulation enabled hardware remote");
         Require(Parkour({}).port == 17200, "Default simulation port changed");
-        Require(Dwaq({"--check-policy", "--config", "custom.json", "--model", "custom.onnx"}).model == "custom.onnx", "Named policy check lost model override");
-        Require(Dwaq({"--check-policy", "custom.onnx", "custom.json"}).config == "custom.json", "Legacy model-first check broken");
+        Require(Dwaq({"--check-policy", "--config", "custom.json"}).config == "custom.json", "Named configuration lost");
+        for (const auto* removed : {"--unitree-remote", "--model", "--model-dir", "--limits", "--reset-seconds"}) {
+            Reject([&] { Dwaq({removed, "value"}); });
+            Reject([&] { Parkour({removed, "value"}); });
+        }
+        Reject([] { Dwaq({"3", "lo", "1"}); });
+        Reject([] { Dwaq({"--check-policy", "custom.json"}); });
+        Reject([] { Parkour({"3", "lo", "1"}); });
+        Reject([] { Dwaq({"--check-joystick", "--hardware-read-only"}); });
         Require(Dwaq({"--check-joystick"}).mode == g1_dwaq_app::Mode::CheckJoystick, "Joystick diagnostic broken");
         Reject([] { Dwaq({"--sim", "--hardware"}); });
         Reject([] { Parkour({"--sim", "--hardware"}); });
@@ -63,12 +68,9 @@ int main() {
         if (!interface.empty()) {
             const auto hardware = Dwaq({"--hardware", "--domain", "0", "--interface", interface, "--config", "test.json"});
             SameRuntime(hardware, Parkour({"--hardware", "--domain", "0", "--interface", interface, "--config", "test.json"}));
-            SameRuntime(hardware, Dwaq({"--hardware", "3", interface, "0", "test.json"}));
-            Require(hardware.unitree_remote, "Hardware did not default to remote");
-            Require(!Dwaq({"--hardware-read-only", "--domain", "0", "--interface", interface}).unitree_remote, "Read-only enabled control input");
         } else {
             std::cout << "No non-loopback interface; hardware-interface cases skipped\n";
         }
-        std::cout << "Named options, legacy compatibility and shared validation passed\n";
+        std::cout << "Named options, removed arguments and shared validation passed\n";
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

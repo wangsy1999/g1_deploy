@@ -1,4 +1,5 @@
 {
+  "reset_seconds": 3.0,
   "models": {
     "depth_encoder": "../models/0-depth_encoder.onnx",
     "actor": "../models/actor.onnx"

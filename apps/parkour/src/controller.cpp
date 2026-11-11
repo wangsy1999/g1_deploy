@@ -1,5 +1,5 @@
 // Parkour controller: synchronized observations, reset/hold and actuator lifecycle.
-#include "g1_parkour_app.h"
+#include "g1_parkour_controller.h"
 #include "g1_loop_scheduler.h"
 #include "g1_dds_state_cache.h"
 #include "g1_monitor_publisher.h"
@@ -44,10 +44,10 @@ int CheckPolicy(g1_parkour::Policy& policy) {
 
 class ParkourController {
 public:
-    ParkourController(const Options& options, g1_parkour::Policy& policy)
-        : policy(policy), hardware(options.hardware), config(options.config), limits_config(options.limits_config),
+    ParkourController(const Options& options, g1_parkour::Policy& policy, double reset_duration)
+        : policy(policy), hardware(options.hardware), config(options.config),
           interface(options.interface), joystick(options.joystick), domain(options.domain), port(options.port),
-          reset_seconds(options.reset_seconds), states("rt/lowstate") {}
+          reset_seconds(reset_duration), states("rt/lowstate") {}
 
     int Run() {
         Initialize();
@@ -79,7 +79,7 @@ public:
 private:
     void Initialize() {
         if(hardware) {
-            limits=std::make_unique<g1_hardware::Limits>(YAML::LoadFile(limits_config.empty() ? config : limits_config));
+            limits=std::make_unique<g1_hardware::Limits>(YAML::LoadFile(config));
             const auto pose=policy.DefaultDds();
             for(int i=0;i<29;++i) if(pose[i]<limits->lower[i]+.01f||pose[i]>limits->upper[i]-.01f)
                 throw std::runtime_error("Parkour reset pose exceeds hardware limits");
@@ -327,7 +327,7 @@ private:
     using PolicyWorker = g1_inference::PolicyWorker<g1_parkour::Observation, g1_parkour::Joints>;
     g1_parkour::Policy& policy;
     const bool hardware;
-    const std::string config, limits_config, interface, joystick;
+    const std::string config, interface, joystick;
     const int domain, port;
     const double reset_seconds;
     std::unique_ptr<g1_hardware::Limits> limits;
@@ -359,10 +359,11 @@ private:
 
 }  // namespace
 
-int Run(const Options& options) {
+int RunController(const Options& options) {
     g1_control::InstallSignalHandlers();
-    g1_parkour::Policy policy(options.models, options.config);
+    g1_parkour::Policy policy(options.config);
     if (options.mode == Mode::CheckPolicy) return CheckPolicy(policy);
-    return ParkourController(options, policy).Run();
+    const auto reset_seconds = g1_config::ReadResetSeconds(YAML::LoadFile(options.config));
+    return ParkourController(options, policy, reset_seconds).Run();
 }
 }  // namespace g1_parkour_app

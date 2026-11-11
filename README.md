@@ -36,7 +36,7 @@ C++控制程序不依赖MuJoCo、ROS或Python；可选网页监控需要Python�
 | 仿真控制 | `./g1 dwaq sim` | `./g1 parkour sim` |
 | 实机控制 | `./g1 dwaq real eth0` | `./g1 parkour real eth0` |
 
-公共参数放在模式后，例如 `./g1 dwaq sim --domain 2 --reset-seconds 3`。默认读取各自 JSON 中的模型路径；Parkour 的 `--port` 和自动相机管理按其深度输入需求保留。`./g1 run eth0`、`./g1 check` 等旧命令仍兼容。
+公共参数放在模式后，例如 `./g1 dwaq sim --domain 2`。默认读取各自 JSON 中的模型路径；Parkour 的 `--port` 和自动相机管理按其深度输入需求保留。`./g1 run eth0`、`./g1 check` 等旧命令仍兼容。
 
 ### DreamWaQ：检查、空跑与行走
 
@@ -47,7 +47,6 @@ C++控制程序不依赖MuJoCo、ROS或Python；可选网页监控需要Python�
 ./g1 joystick /dev/input/js0         # 只检查 F710 输入，不连接 DDS
 ./g1 read-only eth0                 # 只读 LowState、CRC、机型、电机和 IMU 检查后退出
 ./g1 dwaq real eth0                 # 默认原配遥控器，启动时为空跑
-./g1 run eth0 remote                # 兼容旧写法，效果相同
 ```
 
 键盘空跑：`p → 等待 Target interpolation complete → r`；真实输出：`9 → p → 等待 Holding default pose → r`。
@@ -55,12 +54,12 @@ C++控制程序不依赖MuJoCo、ROS或Python；可选网页监控需要Python�
 两套程序实机均默认启用原配遥控器，对应 `Start` 接管、`X` 复位、`A` 策略、`Select` 停止，摇杆直接控制速度；F710 对应 `Start` 接管、`A` 复位、`Y` 策略、仅仿真使用，直接用摇杆运动、`X` 清零、`B` 停止。
 接管会清空空跑目标，必须重新复位再进入策略。具体状态要求和保护见下文与 [硬件说明](docs/HARDWARE.md)。
 
-不安装时可直接运行构建产物；推荐使用与 Parkour 一致的命名参数；旧的位置参数（复位秒数、网卡、DDS 域、配置、模型）仍兼容，但不能与命名的控制参数混用：
+也可直接运行构建产物，两套程序均使用命名参数：
 
 ```bash
-./build/g1_dwaq --check-policy apps/dwaq/config/g1_locomotion.json
+./build/g1_dwaq --check-policy --config apps/dwaq/config/g1_locomotion.json
 ./build/g1_dwaq --hardware-read-only --domain 0 --interface eth0 --config apps/dwaq/config/g1_locomotion.json
-./build/g1_dwaq --hardware --domain 0 --interface eth0 --reset-seconds 3 --config apps/dwaq/config/g1_locomotion.json
+./build/g1_dwaq --hardware --domain 0 --interface eth0 --config apps/dwaq/config/g1_locomotion.json
 # 外部 DreamWaQ 仿真器已启动时：
 ./build/g1_dwaq --sim --domain 1 --interface lo --config apps/dwaq/config/g1_locomotion.json
 ```
@@ -106,7 +105,7 @@ python3 apps/simulation/sim.py --mujoco-root /path/to/unitree_mujoco --domain 1 
 仿真键盘使用 `p` 复位、`r` 策略、`9` 使能输出、`w/s` 前向速度、`q/e` 转向、`x` 清零、空格/Ctrl+C 停止；可加 `--joystick /dev/input/js0` 使用 F710。
 实机使用原配遥控器 `X → 等待 → A` 空跑；完成相机安装、torso IMU 轴向、关节方向和硬件参数核对后，`Start → X → 等待复位 → A` 进入真实输出，`Select` 停止。实机还需要 `rt/secondary_imu` 的 torso IMU。
 
-常用选项：`--port` 修改深度 UDP 端口（仿真默认 `17200`，实机 `17201`），`--reset-seconds` 修改复位时长（默认 3 秒），`--model-dir`、`--config`、`--limits` 指定模型、策略配置和可选的独立硬件限制配置；默认从 Parkour 自己的策略 JSON 中读取 `hardware`。
+常用选项：`--port` 修改深度 UDP 端口（仿真默认 `17200`，实机 `17201`），`--config` 选择策略 JSON。模型路径、`reset_seconds`（默认 3 秒）和 `hardware` 参数统一从各程序自己的 JSON 中读取。
 实机包装脚本还支持 `--camera-web-port 8767` 修改网页端口、`--no-auto-camera` 改为手动管理相机。
 直接运行示例为 `./build/g1_parkour --sim --domain 1 --interface lo --port 17200`；直接实机入口为 `./build/g1_parkour --hardware --domain 0 --interface eth0 --port 17201`，需另行启动相机。`./build/g1_parkour --help` 查看参数。
 
@@ -237,7 +236,7 @@ cmake/           构建信息模板
 
 程序专属文件放在对应的 `apps/<程序>/` 内；跨程序共用文件放在 `common/`，避免复制多份。
 DWaQ 的策略与硬件保护参数位于 `apps/dwaq/config/g1_locomotion.json`；Parkour 的策略与硬件保护参数位于 `apps/parkour/config/g1_parkour.json`。两套程序分别维护自己的配置。
-DWaQ 的 `policy_path`、Parkour 的 `models.depth_encoder` 与 `models.actor` 在各自 JSON 中指定模型文件。相对路径以 JSON 所在目录为基准，默认指向 `../models/`；绝对路径也可使用。直接运行时可用 DWaQ 最后一个模型位置参数或 Parkour 的 `--model-dir` 临时覆盖。DWaQ 离线检查格式为 `--check-policy [配置.json] [覆盖模型.onnx]`。
+DWaQ 的 `policy_path`、Parkour 的 `models.depth_encoder` 与 `models.actor` 在各自 JSON 中指定模型文件。相对路径以 JSON 所在目录为基准，默认指向 `../models/`；绝对路径也可使用。需要更换模型时修改 JSON，或通过 `--config` 选择另一份配置。DWaQ 离线检查格式为 `--check-policy [--config 配置.json]`。两份策略 JSON 的顶层 `reset_seconds` 指定复位插值时长，必须为有限正数；旧配置未提供时默认使用 3 秒。
 安装包内的资源也按 `apps/` 归类，根目录继续提供 `g1`、`parkour`、`realsense` 和 `monitor` 启动入口。
 旧安装目录可能保留旧版文件；建议安装到新目录后再切换使用。
 
@@ -387,7 +386,7 @@ cd /home/unitree/g1_deploy/install
 ```
 
 原配遥控器使用 LowState 内的 `wireless_remote`，不需要 USB 接收器或 `/dev/input/js0`。
-DWaQ 和 Parkour 实机控制均默认使用原配遥控器；DWaQ 不再需要追加 `remote` 或 `--unitree-remote`，旧写法仍兼容。键盘保留接管、复位、策略启停和空格/Ctrl+C 停止操作；实机速度由遥控器摇杆控制，F710 仅用于仿真。
+DWaQ 和 Parkour 实机控制均默认使用原配遥控器。键盘保留接管、复位、策略启停和空格/Ctrl+C 停止操作；实机速度由遥控器摇杆控制，F710 仅用于仿真。
 
 | 输入 | 行为 |
 | --- | --- |

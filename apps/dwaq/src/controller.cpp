@@ -1,5 +1,5 @@
 // DWaQ controller: DDS state, reset/hold, policy scheduling and actuator lifecycle.
-#include "g1_dwaq_app.h"
+#include "g1_dwaq_controller.h"
 #include "g1_loop_scheduler.h"
 #include "g1_dds_state_cache.h"
 #include "g1_monitor_publisher.h"
@@ -40,6 +40,7 @@ using Clock = std::chrono::steady_clock;
 namespace {
 constexpr std::size_t kJointCount = 29;
 struct ResetConfig {
+    double reset_seconds = 3;
     std::array<float, kJointCount> default_pos{};
     std::array<float, kJointCount> kp{};
     std::array<float, kJointCount> kd{};
@@ -48,6 +49,7 @@ struct ResetConfig {
 ResetConfig LoadConfig(const std::string& path) {
     const auto root = YAML::LoadFile(path);
     ResetConfig config;
+    config.reset_seconds = g1_config::ReadResetSeconds(root);
     const auto ids = g1_config::ReadArray<int, kJointCount>(root["joint_ids_map"]);
     const auto positions = g1_config::ReadArray<float, kJointCount>(root["default_joint_pos"]);
     config.kp = g1_config::ReadArray<float, kJointCount>(root["stiffness"]);
@@ -418,7 +420,7 @@ private:
 namespace g1_dwaq_app {
 namespace {
 int CheckPolicy(const Options& options) {
-    g1_policy::Policy policy(options.model, options.config);
+    g1_policy::Policy policy(options.config);
     g1_policy::State state;
     state.q = policy.DefaultDds();
     const auto target = policy.Step(state, {0, 0, 0});
@@ -435,7 +437,7 @@ int CheckJoystick(const Options& options) {
     return 0;
 }
 
-int RunController(const Options& options) {
+int RunControlSession(const Options& options) {
     const bool read_only = options.mode == Mode::ReadOnly;
     std::unique_ptr<g1_gamepad::Device> gamepad;
     if (!options.joystick.empty()) {
@@ -446,7 +448,7 @@ int RunController(const Options& options) {
     std::cout << "Loaded locomotion configuration: " << options.config << '\n';
     std::unique_ptr<g1_policy::Policy> policy;
     if (!read_only) {
-        policy = std::make_unique<g1_policy::Policy>(options.model, options.config);
+        policy = std::make_unique<g1_policy::Policy>(options.config);
         std::cout << "Loaded locomotion policy, period " << policy->dt << " s\n";
     }
     std::unique_ptr<g1_hardware::Limits> hardware_limits;
@@ -458,16 +460,16 @@ int RunController(const Options& options) {
                 throw std::runtime_error("Reset pose outside hardware joint limits");
     }
     unitree::robot::ChannelFactory::Instance()->Init(options.domain, options.interface);
-    DwaqController controller(config, hardware_limits.get(), read_only, options.unitree_remote,
+    DwaqController controller(config, hardware_limits.get(), read_only, options.hardware && !read_only,
                           policy.get(), gamepad.get());
-    return controller.Run(options.reset_seconds);
+    return controller.Run(config.reset_seconds);
 }
 }  // namespace
 
-int Run(const Options& options) {
+int RunController(const Options& options) {
     g1_control::InstallSignalHandlers();
     if (options.mode == Mode::CheckPolicy) return CheckPolicy(options);
     if (options.mode == Mode::CheckJoystick) return CheckJoystick(options);
-    return RunController(options);
+    return RunControlSession(options);
 }
 }  // namespace g1_dwaq_app

@@ -1,4 +1,5 @@
-#include "g1_parkour_app.h"
+#include "g1_parkour_options.h"
+#include "g1_parkour_controller.h"
 #include <exception>
 #include <iostream>
 
@@ -9,7 +10,7 @@ int main(int argc, char** argv) {
             g1_parkour_app::PrintUsage(options.program);
             return options.help_exit_code;
         }
-        return g1_parkour_app::Run(options);
+        return g1_parkour_app::RunController(options);
     } catch (const std::exception& error) {
         std::cerr << "g1_parkour: " << error.what() << '\n';
         return 1;

@@ -21,6 +21,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <utility>
 
 namespace g1_parkour {
 inline constexpr int kJointCount = 29;
@@ -59,21 +60,26 @@ public:
     uint32_t signature = 2166136261u;
     double dt = .02;
 
-    Policy(const std::string& models, const std::string& config) {
+    explicit Policy(const std::string& config) {
         const auto settings = YAML::LoadFile(config);
         LoadJointParameters(settings);
         LoadHistoryTiming(settings);
         BuildJointMapping(settings);
         LoadCameraProfile(config);
-        LoadNetworks(settings, config, models);
+        LoadNetworks(settings, config);
     }
 
-    // One policy tick: observations -> depth features -> actions -> DDS joint targets.
+    // 每次推理：整理状态和图像 → 理解前方地形 → 预测动作 → 换算电机关节目标。
     Joints Step(const Observation& observation, const std::array<float, 3>& command) {
+        // 1. 准备机器人状态历史和八张深度图。
         auto inputs = Observe(observation, command);
-        auto depth_features = EncodeDepth(inputs.depth_history);
-        auto actions = PredictActions(inputs.proprioception, depth_features);
-        return ProcessActions(actions);
+        // 2. 用深度编码器把图像压缩成地形特征。
+        const auto terrain_features = EncodeDepth(inputs.depth_history);
+        // 3. 将状态历史和地形特征拼在一起，交给动作网络。
+        auto actor_input = CombineStateAndTerrain(std::move(inputs.proprioception), terrain_features);
+        const auto predicted_actions = PredictActions(actor_input);
+        // 4. 把动作换算成电机目标角度，并记住动作供下次使用。
+        return ProcessActions(predicted_actions);
     }
 
     void Reset() {
@@ -86,6 +92,7 @@ public:
         return g1_joints::ToMotorOrder(neutral, ids, sign);
     }
 
+    // 整理本次状态和深度图，更新历史，再按模型训练时的顺序打包。
     NetworkInputs Observe(const Observation& observation, const std::array<float, 3>& command) {
         const auto frame = BuildProprioception(observation, command);
         const auto image = PrepareDepthImage(observation);
@@ -251,16 +258,13 @@ private:
             raw_profile_ = YAML::LoadFile(path.string())["preprocessing"];
     }
 
-    void LoadNetworks(const YAML::Node& settings, const std::string& config,
-                      const std::string& model_override) {
-        auto model_path = [&](const char* key, const char* filename) {
-            if (!model_override.empty())
-                return (std::filesystem::path(model_override) / filename).string();
+    void LoadNetworks(const YAML::Node& settings, const std::string& config) {
+        auto model_path = [&](const char* key) {
             return g1_config::ResolvePath(config, settings["models"][key].as<std::string>());
         };
         auto options = g1_onnx::CpuSessionOptions();
-        encoder_ = std::make_unique<Ort::Session>(env_, model_path("depth_encoder", "0-depth_encoder.onnx").c_str(), options);
-        actor_ = std::make_unique<Ort::Session>(env_, model_path("actor", "actor.onnx").c_str(), options);
+        encoder_ = std::make_unique<Ort::Session>(env_, model_path("depth_encoder").c_str(), options);
+        actor_ = std::make_unique<Ort::Session>(env_, model_path("actor").c_str(), options);
         g1_onnx::ValidateSingleInputNetwork(*encoder_, {1, kHistoryFrames, kDepthHeight, kDepthWidth},
                         {1, kDepthFeatureSize}, encoder_in_, encoder_out_);
         g1_onnx::ValidateSingleInputNetwork(*actor_, {1, kActorInputSize}, {1, kJointCount}, actor_in_, actor_out_);
@@ -322,18 +326,27 @@ private:
         return input;
     }
 
+    // 把八张深度图交给编码器，提取 128 个地形特征。
     std::array<float, kDepthFeatureSize> EncodeDepth(std::vector<float>& depth_history) {
         return g1_onnx::Run<kDepthFeatureSize>(*encoder_, depth_history, {1, kHistoryFrames, kDepthHeight, kDepthWidth},
                           encoder_in_, encoder_out_);
     }
 
-    Joints PredictActions(std::vector<float>& proprioception,
-                                      const std::array<float, kDepthFeatureSize>& depth_features) {
-        // Actor input: 768 state-history values followed by 128 depth features.
-        proprioception.insert(proprioception.end(), depth_features.begin(), depth_features.end());
-        return g1_onnx::Run<kJointCount>(*actor_, proprioception, {1, kActorInputSize}, actor_in_, actor_out_);
+    // 动作网络同时需要“机器人最近的状态”和“深度网络提取的地形特征”。
+    static std::vector<float> CombineStateAndTerrain(
+            std::vector<float> state_history,
+            const std::array<float, kDepthFeatureSize>& terrain_features) {
+        // 固定顺序：先放 768 个状态历史值，再放 128 个地形特征值。
+        state_history.insert(state_history.end(), terrain_features.begin(), terrain_features.end());
+        return state_history;
     }
 
+    Joints PredictActions(std::vector<float>& actor_input) {
+        return g1_onnx::Run<kJointCount>(*actor_, actor_input, {1, kActorInputSize}, actor_in_, actor_out_);
+    }
+
+    // 动作值 × 缩放 + 默认姿态，再按关节方向和 DDS 顺序转换成目标角度。
+    // 保留本次动作作为下一次推理输入；目标角度仍使用原有范围限幅。
     Joints ProcessActions(const Joints& actions) {
         Joints target{};
         for (int joint = 0; joint < kJointCount; ++joint) {

@@ -21,6 +21,15 @@ std::array<T, N> ReadArray(const YAML::Node& node) {
     return values;
 }
 
+// 复位时长属于程序配置；旧配置缺省时沿用 3 秒。
+inline double ReadResetSeconds(const YAML::Node& settings) {
+    const auto value = settings["reset_seconds"];
+    const double seconds = value.IsDefined() ? value.as<double>() : 3.0;
+    if (!std::isfinite(seconds) || seconds <= 0)
+        throw std::runtime_error("reset_seconds must be finite and positive");
+    return seconds;
+}
+
 // Absolute values are retained; relative values are based on the configuration file.
 inline std::string ResolvePath(const std::string& config, const std::string& value) {
     return (std::filesystem::path(config).parent_path() / value).lexically_normal().string();

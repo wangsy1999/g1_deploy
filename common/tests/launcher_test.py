@@ -65,10 +65,15 @@ class LauncherTest(unittest.TestCase):
         interface = interfaces[0]
         for app in ("dwaq", "parkour"):
             options = ["--no-auto-camera"] if app == "parkour" else []
-            args = self.arguments(app, "real", interface, *options, "--reset-seconds", "4")
+            args = self.arguments(app, "real", interface, *options, "--config", "custom config.json")
+            self.assertNotIn("--reset-seconds", args)
             self.assertIn("--hardware", args)
             self.assertEqual(args[args.index("--interface") + 1], interface)
-            self.assertEqual(args[-2:], ["--reset-seconds", "4"])
+            self.assertEqual(args[-2:], ["--config", "custom config.json"])
+        self.assertEqual(self.launch("dwaq", "real", interface, "remote").returncode, 2)
+        self.assertEqual(self.launch("parkour", "real", interface, "remote").returncode, 2)
+        for removed in ("--model", "--model-dir", "--limits", "--unitree-remote", "--reset-seconds"):
+            self.assertEqual(self.launch("parkour", "real", interface, removed, "value").returncode, 2)
         camera = self.arguments("parkour", "real", interface, "--port", "18001")
         self.assertTrue(camera[0].endswith("parkour_camera.py"))
         self.assertEqual(camera[camera.index("--depth-port") + 1], "18001")

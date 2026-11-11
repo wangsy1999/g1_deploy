@@ -1,4 +1,5 @@
-#include "g1_dwaq_app.h"
+#include "g1_dwaq_options.h"
+#include "g1_dwaq_controller.h"
 #include <exception>
 #include <iostream>
 
@@ -9,7 +10,7 @@ int main(int argc, char** argv) {
             g1_dwaq_app::PrintUsage(options.program);
             return options.help_exit_code;
         }
-        return g1_dwaq_app::Run(options);
+        return g1_dwaq_app::RunController(options);
     } catch (const std::exception& error) {
         std::cerr << "Error: " << error.what() << '\n';
         return 1;

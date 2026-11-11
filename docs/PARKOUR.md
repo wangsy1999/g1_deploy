@@ -144,7 +144,7 @@ RealSense 用其实际内参映射训练89.51°×58.29°视场，保持光轴Z�
 裁剪、深度缺失和视场覆盖率需先在网页检查；非零畸变的深度流会被拒绝，需提供已校正的深度配置。
 
 保护沿用最新远程硬件接口：CRC/机型/有限状态及指令/电机故障和温度/倾角，主状态/torso IMU 超时100ms、相机超时150ms、流重启/回放、20ms推理超时。
-不计算估算 PD 力矩，也不因实测关节位置或速度越出配置范围自动退出。目标变化率始终不限制；默认读取 `apps/parkour/config/g1_parkour.json` 中的 `hardware`；可用 `--limits JSON` 指定独立硬件配置。配置中的`hardware.limit_target_position`可开启目标角限位，按`joint_lower/joint_upper`夹紧，当前配置已开启并设为±5 rad。
+不计算估算 PD 力矩，也不因实测关节位置或速度越出配置范围自动退出。目标变化率始终不限制；读取 `--config` 所选策略 JSON 中的 `hardware`，默认配置为 `apps/parkour/config/g1_parkour.json`。配置中的`hardware.limit_target_position`可开启目标角限位，按`joint_lower/joint_upper`夹紧，当前配置已开启并设为±5 rad。
 `g1_parkour.json` 中源训练的 `effort_limit` 仅供外部 MuJoCo 适配器限制仿真力矩，不用于 C++ 实机估算力矩拦截。
 相机采集/网页运行在独立进程；C++推理与控制发布仍在同一控制线程，不是硬实时控制或独立硬件看门狗。
 模型参数由源仓库从训练源码重建，缺少原训练运行的完整参数快照。集成通过不代表实机稳定跑酷；当前没有相机或机器人现场验收。

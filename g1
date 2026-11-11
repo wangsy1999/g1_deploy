@@ -17,7 +17,8 @@ Usage:
                                     Hardware control, Unitree remote by default
   ./g1 dwaq|parkour help             Show usage
 
-Options: --config JSON --reset-seconds 3; sim also accepts --domain 1 --interface lo.
+Options: --config JSON; sim also accepts --domain 1 --interface lo.
+Model paths, reset_seconds and hardware limits are configured in each program's JSON.
 Parkour real automatically manages its depth camera; --no-auto-camera disables this.
 The same commands work in the source checkout and installed package.
 Legacy DWaQ shortcuts remain available:
@@ -28,8 +29,7 @@ Legacy DWaQ shortcuts remain available:
   ./g1 parkour check|sim|real ...     Dual-network parkour inference (separate executable)
   ./g1 joystick [DEVICE]             Read-only F710 input check, no DDS
   ./g1 read-only ROBOT_INTERFACE      Subscribe to hardware state, no commands or mode release
-  ./g1 run ROBOT_INTERFACE [remote]   Hardware control, Unitree remote by default
-  ./g1 run ROBOT_INTERFACE remote     Unitree: Start enables, X reset, A policy, Select stop; no R1 gate
+  ./g1 run ROBOT_INTERFACE            Hardware control, Unitree remote by default
 
 Example interface: eth0 (use the actual onboard interface, never lo).
 run starts in dry run: X -> wait -> A previews targets without actuator commands.
@@ -80,10 +80,13 @@ case "$mode" in
         }
         [[ -d "/sys/class/net/$robot_interface" ]] || { echo "No such interface: $robot_interface" >&2; exit 2; }
         if [[ "$mode" == read-only ]]; then
-            exec "$controller" --hardware-read-only --reset-seconds 3 --interface "$robot_interface" --domain 0 --config "$config" "$@"
+            exec "$controller" --hardware-read-only --interface "$robot_interface" --domain 0 --config "$config" "$@"
         fi
-        if [[ "${1:-}" == remote ]]; then shift; fi
-        exec "$controller" --hardware --reset-seconds 3 --interface "$robot_interface" --domain 0 --config "$config" "$@"
+        if [[ "${1:-}" == remote ]]; then
+            echo 'The remote argument was removed; hardware uses the Unitree remote by default.' >&2
+            exit 2
+        fi
+        exec "$controller" --hardware --interface "$robot_interface" --domain 0 --config "$config" "$@"
         ;;
     *) usage >&2; exit 2 ;;
 esac
