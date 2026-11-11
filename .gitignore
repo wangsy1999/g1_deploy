@@ -9,3 +9,7 @@ __pycache__/
 *.pid
 /deployment-backups/
 /diagnostics/
+/.deps/
+/.deploy-cache/
+/build-sdk/
+/logs/

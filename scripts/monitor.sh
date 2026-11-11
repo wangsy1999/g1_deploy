@@ -18,10 +18,20 @@ interface="$1"
 }
 [[ -f "$root_dir/web/joint_monitor.py" ]] || { echo "Missing web/joint_monitor.py" >&2; exit 1; }
 python="${PYTHON_BIN:-python3}"
+for candidate in "$root_dir/.deps/python/bin/python3" "$root_dir/../.deps/python/bin/python3"; do
+    if [[ -z "${PYTHON_BIN:-}" && -x "$candidate" ]]; then python="$candidate"; break; fi
+done
 if [[ -d "$root_dir/.python-deps" ]]; then
     export PYTHONPATH="$root_dir/.python-deps${PYTHONPATH:+:$PYTHONPATH}"
 fi
 # Match the native SDK used by the controller, without changing the system config.
-export LD_LIBRARY_PATH="/usr/local/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+dds_library_dir=/usr/local/lib
+for dependency_root in "$root_dir/.deps" "$root_dir/../.deps"; do
+    if [[ -f "$dependency_root/cyclonedds/lib/libddsc.so" ]]; then
+        dds_library_dir="$dependency_root/cyclonedds/lib"
+        break
+    fi
+done
+export LD_LIBRARY_PATH="$dds_library_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 exec "$python" -u "$root_dir/web/joint_monitor.py" \
     --domain 0 --interface "$interface" --host "${2:-127.0.0.1}" --port "${3:-8765}" --rate 50

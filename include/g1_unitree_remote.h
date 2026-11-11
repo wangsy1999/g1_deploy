@@ -25,8 +25,8 @@ public:
         const unsigned keys=unsigned(raw[2]) | unsigned(raw[3])<<8;
         const bool initial=!initialized_;
         state.Button(BTN_START,keys&(1u<<2),initial); // Start = real handover
-        state.Button(BTN_A,keys&(1u<<10),initial);   // X = reset
-        state.Button(BTN_Y,keys&(1u<<8),initial);   // A = policy
+        state.Button(BTN_X,keys&(1u<<10),initial);   // X = reset
+        state.Button(BTN_A,keys&(1u<<8),initial);   // A = policy
         // A held Select must stop even in the first received packet.
         state.Button(BTN_B,keys&(1u<<3),false);     // Select = stop/exit
         initialized_=true;

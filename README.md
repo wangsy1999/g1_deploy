@@ -209,6 +209,18 @@ bash scripts/monitor.sh enP8p1s0 192.168.123.164 8765
 浏览器访问`http://192.168.123.164:8765/`。网页只读，不会启动控制程序。
 完整说明见 [网页监控部署](docs/WEB.md)。
 
+## 一键配置当前 ARM64 机器人
+
+先**手动复制**本项目与 `.deploy-cache/robot-arm64/` 到机器人，再在项目根目录运行：
+
+```bash
+bash scripts/setup_robot.sh
+```
+
+该入口离线配置项目独立的 Python、SDK、ONNX Runtime 与相机专用 glibc 2.35，然后编译、测试和安装。
+不执行文件同步，不替换系统 glibc，不启动控制程序。支持 `--verify-camera` 只读相机验证。
+详细用法、缺失系统包的处理和离线缓存说明见 [机器人一键配置](docs/ROBOT_SETUP.md)。
+
 ## 在G1开发计算机上编译
 
 使用开发计算单元PC2，保留运动控制计算机PC1的厂商系统。

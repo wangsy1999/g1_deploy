@@ -14,6 +14,9 @@ python="${PYTHON_BIN:-python3}"
 for dependency_root in "$root_dir/.deps" "$root_dir/../.deps"; do
     if [[ -z "${PYTHON_BIN:-}" && -x "$dependency_root/python/bin/python3" ]]; then
         python="$dependency_root/python/bin/python3"
+        if [[ -x "$dependency_root/python/bin/python3-realsense" ]]; then
+            python="$dependency_root/python/bin/python3-realsense"
+        fi
         export LD_LIBRARY_PATH="$dependency_root/realsense/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
         break
     fi
