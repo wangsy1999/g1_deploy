@@ -101,7 +101,7 @@ ResetConfig LoadConfig(const std::string& path) {
     const auto kd = root["damping"];
     for (const auto& array : {ids, positions, kp, kd})
         if (!array.IsSequence() || array.size() != kJointCount)
-            throw std::runtime_error("Expected 29 joint IDs, default positions and PD gains in locomotion YAML");
+            throw std::runtime_error("Expected 29 joint IDs, default positions and PD gains in locomotion JSON");
     std::array<bool, kJointCount> seen{};
     for (std::size_t i = 0; i < kJointCount; ++i) {
         const int id = ids[i].as<int>();
@@ -114,7 +114,7 @@ ResetConfig LoadConfig(const std::string& path) {
         config.kd[i] = kd[i].as<float>();
         if (!std::isfinite(q) || !std::isfinite(config.kp[i]) ||
             !std::isfinite(config.kd[i]) || config.kp[i] < 0 || config.kd[i] < 0)
-            throw std::runtime_error("Invalid default position or PD gains in locomotion YAML");
+            throw std::runtime_error("Invalid default position or PD gains in locomotion JSON");
     }
     return config;
 }
@@ -590,9 +590,14 @@ int main(int argc, char** argv) {
     }
     if (argc > 1 && std::string(argv[1]) == "--check-policy") {
         try {
-            if (argc > 4) throw std::runtime_error("Usage: --check-policy [model.onnx] [deploy.yaml]");
-            g1_policy::Policy policy(argc > 2 ? argv[2] : G1_POLICY_DEFAULT_MODEL,
-                                     argc > 3 ? argv[3] : G1_POLICY_DEFAULT_CONFIG);
+            if (argc > 4) throw std::runtime_error("Usage: --check-policy [deploy.json] [model.onnx]");
+            // Accept the previous model-first check syntax as well.
+            const bool model_first = argc > 2 && std::filesystem::path(argv[2]).extension() == ".onnx";
+            const std::string check_config = model_first
+                ? (argc > 3 ? argv[3] : G1_POLICY_DEFAULT_CONFIG)
+                : (argc > 2 ? argv[2] : G1_POLICY_DEFAULT_CONFIG);
+            const std::string check_model = model_first ? argv[2] : (argc > 3 ? argv[3] : "");
+            g1_policy::Policy policy(check_model, check_config);
             g1_policy::State state;
             state.q = policy.DefaultDds();
             const auto target = policy.Step(state, {0, 0, 0});
@@ -610,11 +615,11 @@ int main(int argc, char** argv) {
     constexpr int max_args = 5;
 #endif
     if (argc > max_args || (argc > 1 && std::string(argv[1]) == "--help")) {
-        std::cout << "Usage: " << argv[0] << " [reset_seconds=3] [interface=lo] [domain=1] [locomotion.yaml]\n"
+        std::cout << "Usage: " << argv[0] << " [reset_seconds=3] [interface=lo] [domain=1] [locomotion.json]\n"
                   << "Default: MuJoCo, positive domain. Hardware: prepend --hardware or --hardware-read-only, explicitly set interface and domain 0.\n";
 #ifdef G1_WITH_POLICY
-        std::cout << "Optional argument after locomotion.yaml: [model.onnx]\n"
-                  << "Offline inference: --check-policy [model.onnx] [deploy.yaml]\n"
+        std::cout << "Optional argument after locomotion.json: [model.onnx]\n"
+                  << "Offline inference: --check-policy [deploy.json] [model.onnx]\n"
                   << "F710: --joystick /dev/input/js0; input-only check: --check-joystick [--joystick DEVICE]\n"
                   << "Unitree remote: --unitree-remote; Start enables, X reset, A policy, Select stop; direct sticks, no R1 gate.\n"
                   << "Start enable, X reset, A policy; left stick XY/right stick X to move (simulation only, no RB required); Y zero, B exit.\n";
@@ -634,7 +639,7 @@ int main(int argc, char** argv) {
         const double duration = std::stod(duration_text, &consumed);
         if (consumed != duration_text.size() || !std::isfinite(duration) || duration <= 0)
             throw std::invalid_argument("reset_seconds must be finite and positive");
-        if (hardware && argc < 4) throw std::invalid_argument("Hardware usage: " + program + " --hardware[-read-only] 3 <network_interface> 0 [locomotion.yaml] [model.onnx]");
+        if (hardware && argc < 4) throw std::invalid_argument("Hardware usage: " + program + " --hardware[-read-only] 3 <network_interface> 0 [locomotion.json] [model.onnx]");
         const std::string domain_text = argc > 3 ? argv[3] : "1";
         const int domain = std::stoi(domain_text, &consumed);
         if (consumed != domain_text.size() || (hardware ? domain != 0 : domain <= 0))
@@ -643,11 +648,11 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("Specify an existing non-loopback robot network interface");
         const std::string config_path = argc > 4 ? argv[4] : G1_POLICY_DEFAULT_CONFIG;
         const auto config = LoadConfig(config_path);
-        std::cout << "Loaded shared locomotion configuration: " << config_path << '\n';
+        std::cout << "Loaded locomotion configuration: " << config_path << '\n';
 #ifdef G1_WITH_POLICY
         std::unique_ptr<g1_policy::Policy> policy;
         if (!read_only) {
-            policy = std::make_unique<g1_policy::Policy>(argc > 5 ? argv[5] : G1_POLICY_DEFAULT_MODEL, config_path);
+            policy = std::make_unique<g1_policy::Policy>(argc > 5 ? argv[5] : "", config_path);
             std::cout << "Loaded locomotion policy, period " << policy->dt << " s\n";
         }
 #endif

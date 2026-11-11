@@ -34,7 +34,7 @@ def probe(port, depth_port):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument('--web-port', type=int, default=18766)
     parser.add_argument('--depth-port', type=int, default=17291)
     parser.add_argument('--probe', action='store_true', help=argparse.SUPPRESS)
@@ -42,7 +42,7 @@ def main():
     if args.probe:
         probe(args.web_port, args.depth_port)
         return 0
-    command = [sys.executable, str(args.root / 'camera/parkour_camera.py'),
+    command = [sys.executable, str(args.root / 'apps/parkour/parkour_camera.py'),
                '--root', str(args.root), '--web-port', str(args.web_port),
                '--depth-port', str(args.depth_port), '--',
                sys.executable, str(Path(__file__).resolve()), '--probe',

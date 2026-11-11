@@ -1,7 +1,7 @@
 # g1_deploy — G1 DreamWaQ 机载部署
 
 新增独立的 **RealSense RGB/深度网页测试**与 **Parkour 双网络推理**（MuJoCo 相机 / 实机 RealSense 切换）。
-入口为 `scripts/realsense.sh`、`scripts/parkour.sh`，安装后也可用 `./g1 realsense`、`./g1 parkour`。
+入口为 `apps/realsense/realsense.sh`、`apps/parkour/parkour.sh`，安装后也可用 `./g1 realsense`、`./g1 parkour`。
 完整接线、依赖、启动、空跑和标定要求见 [Parkour 与 RealSense 说明](docs/PARKOUR.md)。原 DreamWaQ 程序独立保留。
 
 独立的G1 29DOF DreamWaQ C++推理项目，纯粹的vibe coding by codex。直接读取Unitree DDS低层状态并下发PR关节目标。
@@ -19,14 +19,14 @@ C++控制程序不依赖MuJoCo、ROS或Python；可选网页监控需要Python�
 
 | 程序 / 源码入口 | 功能 | 常用启动方式 |
 | --- | --- | --- |
-| `g1_dwaq` / `src/main.cpp` | DreamWaQ 行走策略、姿态复位、硬件只读检查和手柄诊断 | 安装后 `./g1 check`、`./g1 read-only eth0`、`./g1 run eth0 remote` |
-| `g1_parkour` / `src/parkour.cpp` | 深度编码器与动作网络双 ONNX 推理，支持 MuJoCo 或实机深度输入 | `bash scripts/parkour.sh check\|sim\|real ...`（按需选择一个子命令） |
-| `web/joint_monitor.py` | 只读关节、IMU、实际/目标曲线及空跑目标网页 | `bash scripts/monitor.sh eth0 0.0.0.0 8765` |
-| `camera/realsense_web.py` | RealSense 原始/策略深度预览、可选 RGB、本机深度 UDP 转发 | `bash scripts/realsense.sh --host 0.0.0.0 --port 8766` |
-| `camera/parkour_camera.py` | 管理相机与控制器生命周期，等待新帧、复用兼容服务、保存相机日志 | 由 `bash scripts/parkour.sh real eth0` 自动调用 |
-| `scripts/parkour_sim.py` | 启动外部 MuJoCo 查看器，并加载本项目 Parkour 配置与相机桥接 | `python3 scripts/parkour_sim.py --mujoco-root /path/to/unitree_mujoco` |
+| `g1_dwaq` / `apps/dwaq/src/main.cpp` | DreamWaQ 行走策略、姿态复位、硬件只读检查和手柄诊断 | 安装后 `./g1 check`、`./g1 read-only eth0`、`./g1 run eth0 remote` |
+| `g1_parkour` / `apps/parkour/src/parkour.cpp` | 深度编码器与动作网络双 ONNX 推理，支持 MuJoCo 或实机深度输入 | `bash apps/parkour/parkour.sh check\|sim\|real ...`（按需选择一个子命令） |
+| `apps/monitor/joint_monitor.py` | 只读关节、IMU、实际/目标曲线及空跑目标网页 | `bash apps/monitor/monitor.sh eth0 0.0.0.0 8765` |
+| `apps/realsense/realsense_web.py` | RealSense 原始/策略深度预览、可选 RGB、本机深度 UDP 转发 | `bash apps/realsense/realsense.sh --host 0.0.0.0 --port 8766` |
+| `apps/parkour/parkour_camera.py` | 管理相机与控制器生命周期，等待新帧、复用兼容服务、保存相机日志 | 由 `bash apps/parkour/parkour.sh real eth0` 自动调用 |
+| `apps/parkour/parkour_sim.py` | 启动外部 MuJoCo 查看器，并加载本项目 Parkour 配置与相机桥接 | `python3 apps/parkour/parkour_sim.py --mujoco-root /path/to/unitree_mujoco` |
 
-`scripts/g1.sh` 是安装包统一入口，安装为 `g1`；`monitor.sh`、`realsense.sh`、`parkour.sh` 同时支持源码和安装目录，安装后分别命名为 `monitor`、`realsense`、`parkour`。`parkour_sim.py` 不随安装包安装，需从源码运行。
+`apps/dwaq/g1.sh` 是安装包统一入口，安装为 `g1`；`monitor.sh`、`realsense.sh`、`parkour.sh` 同时支持源码和安装目录，安装后分别命名为 `monitor`、`realsense`、`parkour`。`parkour_sim.py` 不随安装包安装，需从源码运行。
 
 ### DreamWaQ：检查、空跑与行走
 
@@ -48,26 +48,26 @@ C++控制程序不依赖MuJoCo、ROS或Python；可选网页监控需要Python�
 不安装时可直接运行构建产物；位置参数依次为复位秒数、网卡、DDS 域、配置和模型：
 
 ```bash
-./build/g1_dwaq --check-policy models/policy.onnx config/g1_locomotion.yaml
-./build/g1_dwaq --hardware-read-only 3 eth0 0 config/g1_locomotion.yaml
-./build/g1_dwaq --hardware 3 eth0 0 config/g1_locomotion.yaml models/policy.onnx --unitree-remote
+./build/g1_dwaq --check-policy apps/dwaq/config/g1_locomotion.json
+./build/g1_dwaq --hardware-read-only 3 eth0 0 apps/dwaq/config/g1_locomotion.json
+./build/g1_dwaq --hardware 3 eth0 0 apps/dwaq/config/g1_locomotion.json --unitree-remote
 # 外部 DreamWaQ 仿真器已启动时：
-./build/g1_dwaq 3 lo 1 config/g1_locomotion.yaml models/policy.onnx
+./build/g1_dwaq 3 lo 1 apps/dwaq/config/g1_locomotion.json
 ```
 
 ### Parkour：离线推理、仿真和实机
 
 ```bash
 # 源码根目录；仅执行双网络推理检查，无需相机或 DDS
-bash scripts/parkour.sh check
+bash apps/parkour/parkour.sh check
 
 # 仿真终端一：外部仓库需含 simulate_python/parkour_observation.py
-python3 scripts/parkour_sim.py --mujoco-root /path/to/unitree_mujoco --domain 1 --port 17200
+python3 apps/parkour/parkour_sim.py --mujoco-root /path/to/unitree_mujoco --domain 1 --port 17200
 # 仿真终端二：域号和 UDP 端口与终端一一致
-bash scripts/parkour.sh sim --domain 1 --port 17200
+bash apps/parkour/parkour.sh sim --domain 1 --port 17200
 
 # 实机：自动启动/复用相机，等新帧就绪后启动运控，默认空跑
-bash scripts/parkour.sh real eth0
+bash apps/parkour/parkour.sh real eth0
 ```
 
 安装后分别使用 `./g1 parkour check`、`./g1 parkour sim ...`、`./g1 parkour real eth0 ...`。
@@ -75,14 +75,14 @@ bash scripts/parkour.sh real eth0
 仿真键盘使用 `p` 复位、`r` 策略、`9` 使能输出、`w/s` 前向速度、`q/e` 转向、`x` 清零、空格/Ctrl+C 停止；可加 `--joystick /dev/input/js0` 使用 F710。
 实机使用原配遥控器 `X → 等待 → A` 空跑；完成相机安装、torso IMU 轴向、关节方向和硬件参数核对后，`Start → X → 等待复位 → A` 进入真实输出，`Select` 停止。实机还需要 `rt/secondary_imu` 的 torso IMU。
 
-常用选项：`--port` 修改深度 UDP 端口（仿真默认 `17200`，实机 `17201`），`--reset-seconds` 修改复位时长（默认 3 秒），`--model-dir`、`--config`、`--limits` 指定模型、策略配置和硬件限制。
+常用选项：`--port` 修改深度 UDP 端口（仿真默认 `17200`，实机 `17201`），`--reset-seconds` 修改复位时长（默认 3 秒），`--model-dir`、`--config`、`--limits` 指定模型、策略配置和可选的独立硬件限制配置；默认从 Parkour 自己的策略 JSON 中读取 `hardware`。
 实机包装脚本还支持 `--camera-web-port 8767` 修改网页端口、`--no-auto-camera` 改为手动管理相机。
 直接运行示例为 `./build/g1_parkour --sim --domain 1 --interface lo --port 17200`；直接实机入口为 `./build/g1_parkour --hardware --domain 0 --interface eth0 --port 17201`，需另行启动相机。`./build/g1_parkour --help` 查看参数。
 
-自动相机管理器 `camera/parkour_camera.py` 会把日志写到源码或安装根目录下的 `logs/parkour-camera.log`，控制器退出时结束本次启动的相机，保留复用的相机服务。单独调用方式：
+自动相机管理器 `apps/parkour/parkour_camera.py` 会把日志写到源码或安装根目录下的 `logs/parkour-camera.log`，控制器退出时结束本次启动的相机，保留复用的相机服务。单独调用方式：
 
 ```bash
-python3 camera/parkour_camera.py --root "$PWD" --depth-port 17201 --web-port 8766 -- \
+python3 apps/parkour/parkour_camera.py --root "$PWD" --depth-port 17201 --web-port 8766 -- \
   ./build/g1_parkour --hardware --domain 0 --interface eth0 --port 17201
 ```
 
@@ -90,18 +90,18 @@ python3 camera/parkour_camera.py --root "$PWD" --depth-port 17201 --web-port 876
 
 ### RealSense：查看相机与转发策略深度
 
-Python 依赖为 NumPy、OpenCV 和与目标设备匹配的 `pyrealsense2`，版本范围见 `camera/requirements.txt`；需要已可工作的 RealSense SDK/USB 相机。
+Python 依赖为 NumPy、OpenCV 和与目标设备匹配的 `pyrealsense2`，版本范围见 `apps/realsense/requirements.txt`；需要已可工作的 RealSense SDK/USB 相机。
 启动脚本支持 `PYTHON_BIN=/path/to/python3` 指定解释器。
 
 ```bash
 # 仅查看深度网页；默认 480×270、60 Hz、Instinct 预处理，RGB 默认关闭
-bash scripts/realsense.sh --host 0.0.0.0 --port 8766
+bash apps/realsense/realsense.sh --host 0.0.0.0 --port 8766
 # 开启可选 RGB 预览（独立查看用途）
-bash scripts/realsense.sh --host 0.0.0.0 --port 8766 --color
+bash apps/realsense/realsense.sh --host 0.0.0.0 --port 8766 --color
 # 手动为实机 Parkour 提供本机深度，同时开放网页
-bash scripts/realsense.sh --host 0.0.0.0 --port 8766 --depth-port 17201
+bash apps/realsense/realsense.sh --host 0.0.0.0 --port 8766 --depth-port 17201
 # 无相机时用合成画面检查网页；不能与 --depth-port 同用
-bash scripts/realsense.sh --mock --host 127.0.0.1 --port 8766
+bash apps/realsense/realsense.sh --mock --host 127.0.0.1 --port 8766
 ```
 
 浏览器打开 `http://机器人IP:8766/`，查看原始深度、32×18 策略深度、帧龄和相机状态；`--color` 额外启用 RGB。
@@ -117,19 +117,19 @@ Instinct 原始深度通过本机 `/dev/shm/g1-depth-用户UID-深度端口` 共
 多相机用 `--serial 序列号` 选择；`--profile` 指定预处理配置，`--width/--height/--fps` 选择设备支持的深度模式。
 默认仅监听 `127.0.0.1`；`--token 密码` 可开启 HTTP Basic 认证，用户名为 `camera`。
 按 Ctrl+C 退出。此服务不连接 DDS、不下发电机命令。
-安装后使用 `./g1 realsense ...`；直接 Python 入口为 `python3 camera/realsense_web.py ...`，参数相同，`--help` 查看完整选项。
+安装后使用 `./g1 realsense ...`；直接 Python 入口为 `python3 apps/realsense/realsense_web.py ...`，参数相同，`--help` 查看完整选项。
 
 ### 关节监控：实机与仿真网页
 
-按 [网页部署说明](docs/WEB.md) 准备 `web/requirements.txt` 和官方 `unitree_sdk2py`。
+按 [网页部署说明](docs/WEB.md) 准备 `apps/monitor/requirements.txt` 和官方 `unitree_sdk2py`。
 
 ```bash
 # 源码入口，参数依次为网卡、监听地址、网页端口；固定为实机 DDS 域 0
-bash scripts/monitor.sh eth0 0.0.0.0 8765
+bash apps/monitor/monitor.sh eth0 0.0.0.0 8765
 # 仿真监控：直接 Python 入口可指定仿真域
-python3 web/joint_monitor.py --domain 1 --interface lo --host 127.0.0.1 --port 8765 --rate 50
+python3 apps/monitor/joint_monitor.py --domain 1 --interface lo --host 127.0.0.1 --port 8765 --rate 50
 # 实机直接 Python 入口
-python3 web/joint_monitor.py --domain 0 --interface eth0 --host 0.0.0.0 --port 8765 --rate 50
+python3 apps/monitor/joint_monitor.py --domain 0 --interface eth0 --host 0.0.0.0 --port 8765 --rate 50
 ```
 
 浏览器打开 `http://机器人IP:8765/`（本机仿真用 `http://127.0.0.1:8765/`）。网页显示 29 关节状态、IMU、真实命令及空跑目标，过期数据显示离线；网页不能发送运动命令，Ctrl+C 结束服务。
@@ -180,19 +180,24 @@ cd /home/unitree/g1_deploy/install
 ## 目录
 
 ```text
-src/main.cpp                 DDS、复位、策略切换与硬件控制
-include/                     ONNX策略、硬件检查与F710输入
-config/g1_locomotion.yaml    关节映射、默认角、PD、观测和实机保护
-models/policy.onnx           DreamWaQ网络
-scripts/g1.sh                安装包启动入口
-cmake/BUILD_INFO.in          构建信息模板
-docs/HARDWARE.md             接管、传感器及停止路径说明
-web/joint_monitor.py         只读DDS监控后端
-web/static/joint_monitor.html 网页界面
-scripts/monitor.sh           网页启动入口
-docs/WEB.md                  网页依赖、运行与验证说明
-CHANGELOG.md                 本次改动与验证记录
+apps/
+  dwaq/          DreamWaQ：src/、include/、config/、models/、g1.sh 统一入口
+  parkour/       Parkour：src/、include/、config/、models/、启动与仿真脚本
+  realsense/     相机服务、静态网页、Python 依赖和相机验证工具
+  monitor/       关节监控、静态网页、Python 依赖和启动脚本
+common/
+  include/       共用硬件检查、输入、策略线程、日志和 DDS 通道
+  tests/         共用模块测试
+scripts/         整个项目的机器人环境配置工具
+docs/            硬件、Parkour、网页与部署说明
+cmake/           构建信息模板
 ```
+
+程序专属文件放在对应的 `apps/<程序>/` 内；跨程序共用文件放在 `common/`，避免复制多份。
+DWaQ 的策略与硬件保护参数位于 `apps/dwaq/config/g1_locomotion.json`；Parkour 的策略与硬件保护参数位于 `apps/parkour/config/g1_parkour.json`。两套程序分别维护自己的配置。
+DWaQ 的 `policy_path`、Parkour 的 `models.depth_encoder` 与 `models.actor` 在各自 JSON 中指定模型文件。相对路径以 JSON 所在目录为基准，默认指向 `../models/`；绝对路径也可使用。直接运行时可用 DWaQ 最后一个模型位置参数或 Parkour 的 `--model-dir` 临时覆盖。DWaQ 离线检查格式为 `--check-policy [配置.json] [覆盖模型.onnx]`。
+安装包内的资源也按 `apps/` 归类，根目录继续提供 `g1`、`parkour`、`realsense` 和 `monitor` 启动入口。
+旧安装目录可能保留旧版文件；建议安装到新目录后再切换使用。
 
 模型和配置来源及SHA256见 [ORIGIN.md](ORIGIN.md)。
 网络接口为float32 `observation [1,96]`、`observation_history [1,480]` → `actions [1,29]`。
@@ -202,7 +207,7 @@ DWaQ 在独立策略线程中按配置的 `step_dt` 推理（默认20ms/50Hz）�
 
 ```bash
 # 仓库根目录运行；先按 docs/WEB.md 准备可选Python依赖
-bash scripts/monitor.sh enP8p1s0 192.168.123.164 8765
+bash apps/monitor/monitor.sh enP8p1s0 192.168.123.164 8765
 # cmake安装后也可在install目录执行：./g1 monitor enP8p1s0 192.168.123.164 8765
 ```
 
@@ -243,7 +248,7 @@ cmake --build build -j4
 cmake --install build
 ```
 
-安装目录包含`g1`和`monitor`启动脚本、`bin/g1_dwaq`、`models/`、`config/`、`lib/`和`web/`。
+安装目录包含`g1`和`monitor`启动脚本、`bin/g1_dwaq`、`apps/`和`lib/`。
 ORT随包安装，SDK2/CycloneDDS、yaml-cpp及系统运行库仍由机载环境提供。
 安装时固定SDK对应的运行库目录，避免已加载ROS环境时混用DDS库。
 
@@ -353,7 +358,7 @@ cd /home/unitree/g1_deploy/install
 | Select | 软件停止/退出；已接管时先发送约0.5秒阻尼；不是硬件断电 |
 
 进入策略后直接使用摇杆，不需要按住R1；松手回中后速度归零，死区12%。
-前后范围`[-0.6,1]m/s`、横向`[-0.5,0.5]m/s`、转向`[-1.57,1.57]rad/s`，由YAML配置。
+前后范围`[-0.6,1]m/s`、横向`[-0.5,0.5]m/s`、转向`[-1.57,1.57]rad/s`，由JSON配置。
 输入归一化为`[ly,-lx,-rx]`。启动时已按住的Start/X/A不触发动作，须松开后重新按；
 Select即使启动时按住也停止，且优先于其他按钮。B和Y不映射功能。
 真实控制顺序为`Start → X → 等待Holding default pose → A`；
@@ -373,14 +378,14 @@ LowState超时、无效轴或软件故障会停止，但LowState持续更新不�
 
 ```bash
 ./g1 joystick /dev/input/js0       # 仅手柄输入，不初始化DDS
-./bin/g1_dwaq 3 lo 1 config/g1_locomotion.yaml models/policy.onnx --joystick /dev/input/js0
+./bin/g1_dwaq 3 lo 1 apps/dwaq/config/g1_locomotion.json --joystick /dev/input/js0
 ```
 
 Start使能、X复位、A进入策略；仿真进入前摇杆居中，进入后直接用摇杆运动，无需按住RB。
 DreamWaQ左杆前后控制前后速度、左右控制横移，右杆左右控制转向；Parkour仅支持前向和转向。
 摇杆回中归零，Y清零并锁定运动，摇杆回中后可重新运动；B停止并退出。
 真机使用原配遥控器或键盘，不支持 F710。
-速度按YAML范围缩放：默认前后`[-0.6,1]m/s`、横向`[-0.5,0.5]m/s`、转向`[-1.57,1.57]rad/s`。
+速度按JSON范围缩放：默认前后`[-0.6,1]m/s`、横向`[-0.5,0.5]m/s`、转向`[-1.57,1.57]rad/s`。
 输入诊断显示每个原始轴值，左杆前后为`ABS_Y (0x1)`；若只变化`0x11`，检查MODE状态。
 手柄USB读取失败触发停止，但没有无线链路心跳，不能保证识别接收器仍在线时的无线失联。
 
@@ -389,8 +394,8 @@ DreamWaQ左杆前后控制前后速度、左右控制横移，右杆左右控制
 ```bash
 ./build/g1_dwaq --check-policy
 ./build/g1_dwaq --check-joystick --joystick /dev/input/js0
-./build/g1_dwaq --hardware-read-only 3 eth0 0 config/g1_locomotion.yaml
-./build/g1_dwaq 3 lo 1 config/g1_locomotion.yaml models/policy.onnx --joystick /dev/input/js0
+./build/g1_dwaq --hardware-read-only 3 eth0 0 apps/dwaq/config/g1_locomotion.json
+./build/g1_dwaq 3 lo 1 apps/dwaq/config/g1_locomotion.json --joystick /dev/input/js0
 ```
 
 ## 验证范围

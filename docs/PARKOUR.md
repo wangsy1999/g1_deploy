@@ -10,7 +10,7 @@ MuJoCo 仿真器、XML、网格仍放在外部仓库，不内置本仓库；所�
 参考版本：`project-instinct/instinct_onboard@b6965a4202d8dceaf163dd95edb7742ed5d65e38`。
 
 - 默认仅开启 Z16 深度，480×270、60 Hz；RGB 默认关闭，可用 `--color` 打开可选预览。
-- 实机策略预处理参考该版本 `ParkourAgent.refresh_depth_frame`，当前按需关闭高斯模糊：最近邻缩放至64×36，裁剪 `[18,0,16,16]`，对小于0.2米区域用半径3的 OpenCV INPAINT_NS 补洞，跳过高斯模糊（`gaussian_kernel: 0`），裁剪0–2.5米并归一化至0–1。参数写在 `config/realsense_parkour.json`。
+- 实机策略预处理参考该版本 `ParkourAgent.refresh_depth_frame`，当前按需关闭高斯模糊：最近邻缩放至64×36，裁剪 `[18,0,16,16]`，对小于0.2米区域用半径3的 OpenCV INPAINT_NS 补洞，跳过高斯模糊（`gaussian_kernel: 0`），裁剪0–2.5米并归一化至0–1。参数写在 `apps/parkour/config/realsense_parkour.json`。
 - 原始480×270米制深度写入本机共享内存，以32字节 `G1DEP003` UDP通知新帧；控制端在50Hz策略观测中执行缩放、裁剪、补洞和归一化，再送入深度历史，高斯模糊默认关闭。策略从策略配置同目录的 `realsense_parkour.json` 加载参数；相机预览应使用相同配置。仿真旧协议与原预处理保留。
 - 深度历史按50Hz策略更新，采样步长按训练时间间隔换算：`round((5/50)/0.02)=5`，不使用相机采集频率换算。保留60项缓冲，取距最新项35/30/25/20/15/10/5/0项（8帧），帧间隔0.1秒、首尾跨度0.7秒，对齐InstinctLab Parkour训练配置。本体观测与模型权重未修改。
 - 相机网页左侧显示完整原始深度，右侧在独立预览线程按相同配置生成32×18深度并放大；视场经过裁剪，不是逐像素对应的全画幅降噪对比。RealSense空间/时间滤波不叠加到此策略路径。
@@ -32,17 +32,17 @@ cmake -S . -B build -DONNXRUNTIME_ROOT=/path/to/native/onnxruntime \
   -DCMAKE_INSTALL_PREFIX="$PWD/install"
 cmake --build build -j4
 cmake --install build
-bash scripts/parkour.sh check
+bash apps/parkour/parkour.sh check
 ```
 
 ## RealSense 网页独立测试
 
 相机外接线接到 PC2 所属 USB 3.x 接口。在 PC2 提供与 JetPack/Python 匹配的 librealsense/pyrealsense2；
-网页还需 NumPy 和无 GUI 的 OpenCV，依赖范围见 `camera/requirements.txt`。Jetson 驱动安装方式需匹配实际 L4T，不自动修改内核或安装驱动。
+网页还需 NumPy 和无 GUI 的 OpenCV，依赖范围见 `apps/realsense/requirements.txt`。Jetson 驱动安装方式需匹配实际 L4T，不自动修改内核或安装驱动。
 已有 OpenCV 时不必再装另一份 headless 轮子。可使用 `.python-deps/` 或通过 `PYTHON_BIN` 指定环境。
 
 ```bash
-bash scripts/realsense.sh --host 0.0.0.0 --port 8766
+bash apps/realsense/realsense.sh --host 0.0.0.0 --port 8766
 # 多相机时添加 --serial 实际序列号
 ```
 
@@ -55,7 +55,7 @@ bash scripts/realsense.sh --host 0.0.0.0 --port 8766
 无相机仅检查网页可运行：
 
 ```bash
-bash scripts/realsense.sh --mock --host 127.0.0.1 --port 8766
+bash apps/realsense/realsense.sh --mock --host 127.0.0.1 --port 8766
 ```
 
 该模式明确显示 `SYNTHETIC TEST`，禁止同时指定 `--depth-port`，不能用于实机策略。
@@ -66,17 +66,17 @@ bash scripts/realsense.sh --mock --host 127.0.0.1 --port 8766
 终端一（Python 环境需要源仓库的 MuJoCo、NumPy、pygame、unitree_sdk2py）：
 
 ```bash
-python scripts/parkour_sim.py --mujoco-root /path/to/unitree_mujoco --domain 1 --port 17200
+python apps/parkour/parkour_sim.py --mujoco-root /path/to/unitree_mujoco --domain 1 --port 17200
 ```
 
 启动器只覆盖当前 Python 进程配置，不修改外部仓库。源仓库用训练相机内外参进行 MuJoCo 射线深度采样，
 每个仿真时刻把关节、torso 角速度、重力、torso 高度和 36×64 深度打包到 `127.0.0.1:17200`。
-启动器强制使用本项目 `config/g1_parkour.json`，保证关节方向签名一致。
+启动器强制使用本项目 `apps/parkour/config/g1_parkour.json`，保证关节方向签名一致。
 
 终端二：
 
 ```bash
-bash scripts/parkour.sh sim --domain 1 --port 17200
+bash apps/parkour/parkour.sh sim --domain 1 --port 17200
 ```
 
 先 `p → 等待 Holding training pose → r` 空跑查看目标；
@@ -99,13 +99,13 @@ bash scripts/parkour.sh sim --domain 1 --port 17200
 先运行独立相机服务，同时启用原始米制深度的本机转发：
 
 ```bash
-bash scripts/realsense.sh --host 0.0.0.0 --port 8766 --depth-port 17201
+bash apps/realsense/realsense.sh --host 0.0.0.0 --port 8766 --depth-port 17201
 ```
 
 再运行实机空跑（替换网卡）：
 
 ```bash
-bash scripts/parkour.sh real eth0
+bash apps/parkour/parkour.sh real eth0
 ```
 
 原配遥控器沿用当前仓库映射：Start 接管、X 复位、A 策略、Select 停止。摇杆直接控制速度，无需 R1。
@@ -137,19 +137,19 @@ Start 之前只有 `rt/g1/dry_run_target`，不会创建 `rt/lowcmd` 发布者�
 深度先采样为 36×64，去掉上18行和左右16列，再3×3 sigma=1模糊、裁剪0–2.5m、归一化。
 
 RealSense 用其实际内参映射训练89.51°×58.29°视场，保持光轴Z深度，不将RGB对齐深度输入策略；零值和视场外为远处/无命中。
-不直接拉伸图像，也不通过伪彩色恢复深度。相机外参记录在 `config/realsense_parkour.json` 中，作为安装要求，不会凭2D缩放自动纠正物理安装偏差。
+不直接拉伸图像，也不通过伪彩色恢复深度。相机外参记录在 `apps/parkour/config/realsense_parkour.json` 中，作为安装要求，不会凭2D缩放自动纠正物理安装偏差。
 默认相机30Hz、策略50Hz，因此部分策略帧复用最新深度；实际传感器时间特性与训练50Hz不同，需评估实机影响。可通过 `--fps` 选设备实际支持的帧率。
 裁剪、深度缺失和视场覆盖率需先在网页检查；非零畸变的深度流会被拒绝，需提供已校正的深度配置。
 
 保护沿用最新远程硬件接口：CRC/机型/有限状态及指令/电机故障和温度/倾角，主状态/torso IMU 超时100ms、相机超时150ms、流重启/回放、20ms推理超时。
-不计算估算 PD 力矩，也不因实测关节位置或速度越出配置范围自动退出。目标变化率始终不限制；`--limits`指定配置中的`hardware.limit_target_position`可开启目标角限位，按`joint_lower/joint_upper`夹紧，当前配置已开启并设为±5 rad。
+不计算估算 PD 力矩，也不因实测关节位置或速度越出配置范围自动退出。目标变化率始终不限制；默认读取 `apps/parkour/config/g1_parkour.json` 中的 `hardware`；可用 `--limits JSON` 指定独立硬件配置。配置中的`hardware.limit_target_position`可开启目标角限位，按`joint_lower/joint_upper`夹紧，当前配置已开启并设为±5 rad。
 `g1_parkour.json` 中源训练的 `effort_limit` 仅供外部 MuJoCo 适配器限制仿真力矩，不用于 C++ 实机估算力矩拦截。
 相机采集/网页运行在独立进程；C++推理与控制发布仍在同一控制线程，不是硬实时控制或独立硬件看门狗。
 模型参数由源仓库从训练源码重建，缺少原训练运行的完整参数快照。集成通过不代表实机稳定跑酷；当前没有相机或机器人现场验收。
 
 ## 历史验证结果
 
-以下为移除自动化测试前的验证记录。当前模型离线检查使用 `bash scripts/parkour.sh check`；仿真手动操作见上文。
+以下为移除自动化测试前的验证记录。当前模型离线检查使用 `bash apps/parkour/parkour.sh check`；仿真手动操作见上文。
 
 本次 x86_64 开发机验证：6 项 C++ 检查、3 项相机网页/深度协议检查、原有3项关节网页检查通过；
 MuJoCo 完成复位、策略重入、停止清零、观测超时停止。短时零命令落地站立检查通过，约4.75秒仿真时间、

@@ -2,10 +2,10 @@
 # Source checkout and installed package share the same read-only camera service.
 set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -f "$script_dir/camera/realsense_web.py" ]]; then
+if [[ -f "$script_dir/apps/realsense/realsense_web.py" ]]; then
     root_dir="$script_dir"
 else
-    root_dir="$(cd -- "$script_dir/.." && pwd)"
+    root_dir="$(cd -- "$script_dir/../.." && pwd)"
 fi
 if [[ -d "$root_dir/.python-deps" ]]; then
     export PYTHONPATH="$root_dir/.python-deps${PYTHONPATH:+:$PYTHONPATH}"
@@ -21,4 +21,4 @@ for dependency_root in "$root_dir/.deps" "$root_dir/../.deps"; do
         break
     fi
 done
-exec "$python" -u "$root_dir/camera/realsense_web.py" "$@"
+exec "$python" -u "$root_dir/apps/realsense/realsense_web.py" "$@"

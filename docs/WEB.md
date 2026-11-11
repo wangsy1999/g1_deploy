@@ -16,7 +16,7 @@ SDK及CycloneDDS运行库和控制程序使用同一套，避免混用ROS环境�
 否则，在仓库根目录安装到项目内；将下面的SDK源码路径替换为本机官方Python SDK路径：
 
 ```bash
-CYCLONEDDS_HOME=/usr/local python3 -m pip install --target .python-deps -r web/requirements.txt
+CYCLONEDDS_HOME=/usr/local python3 -m pip install --target .python-deps -r apps/monitor/requirements.txt
 python3 -m pip install --no-deps --target .python-deps /path/to/unitree_sdk2_python
 ```
 
@@ -28,7 +28,7 @@ python3 -m pip install --no-deps --target .python-deps /path/to/unitree_sdk2_pyt
 
 ```bash
 cd /home/unitree/g1_deploy
-bash scripts/monitor.sh enP8p1s0 192.168.123.164 8765
+bash apps/monitor/monitor.sh enP8p1s0 192.168.123.164 8765
 ```
 
 在同一网络的电脑浏览器访问`http://192.168.123.164:8765/`。
@@ -39,7 +39,7 @@ bash scripts/monitor.sh enP8p1s0 192.168.123.164 8765
 也可直接启动Python后端：
 
 ```bash
-python3 web/joint_monitor.py --domain 0 --interface enP8p1s0 \
+python3 apps/monitor/joint_monitor.py --domain 0 --interface enP8p1s0 \
     --host 192.168.123.164 --port 8765 --rate 50
 ```
 
@@ -47,7 +47,7 @@ python3 web/joint_monitor.py --domain 0 --interface enP8p1s0 \
 
 ## 安装目录
 
-`cmake --install build`会同时安装`web/`和`monitor`启动脚本：
+`cmake --install build`会同时安装`apps/monitor/`和`monitor`启动脚本：
 
 ```bash
 cd install

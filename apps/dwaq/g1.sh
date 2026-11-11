@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-# Installed package entry point. Never enters control mode without an explicit run command.
+# Source checkout and installed package entry point. Never enters control mode without an explicit run command.
 set -euo pipefail
 package_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-controller="$package_dir/bin/g1_dwaq"
-model="$package_dir/models/policy.onnx"
-config="$package_dir/config/g1_locomotion.yaml"
+if [[ -f "$package_dir/src/main.cpp" ]]; then
+    package_dir="$(cd -- "$package_dir/../.." && pwd)"
+    controller="$package_dir/build/g1_dwaq"
+else
+    controller="$package_dir/bin/g1_dwaq"
+fi
+config="$package_dir/apps/dwaq/config/g1_locomotion.json"
 usage() {
     cat <<'HELP'
 Usage:
@@ -36,16 +40,18 @@ if [[ "$mode" == interfaces ]]; then
 fi
 export LD_LIBRARY_PATH="$package_dir/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 if [[ "$mode" == monitor ]]; then
-    exec "$package_dir/monitor" "$@"
+    if [[ -x "$package_dir/monitor" ]]; then exec "$package_dir/monitor" "$@"; fi
+    exec bash "$package_dir/apps/monitor/monitor.sh" "$@"
 fi
 if [[ "$mode" == realsense || "$mode" == parkour ]]; then
-    exec "$package_dir/$mode" "$@"
+    if [[ -x "$package_dir/$mode" ]]; then exec "$package_dir/$mode" "$@"; fi
+    exec bash "$package_dir/apps/$mode/$mode.sh" "$@"
 fi
 [[ -x "$controller" ]] || { echo "Missing executable: $controller" >&2; exit 1; }
 case "$mode" in
     check)
         (($# == 0)) || { usage >&2; exit 2; }
-        exec "$controller" --check-policy "$model" "$config"
+        exec "$controller" --check-policy "$config"
         ;;
     joystick)
         (($# <= 1)) || { usage >&2; exit 2; }
@@ -64,12 +70,12 @@ case "$mode" in
         fi
         if (($#)); then
             if [[ "$1" == remote ]]; then
-                exec "$controller" --hardware 3 "$robot_interface" 0 "$config" "$model" --unitree-remote
+                exec "$controller" --hardware 3 "$robot_interface" 0 "$config" --unitree-remote
             fi
             echo "Hardware input must be remote or omitted for keyboard; F710 is simulation-only." >&2
             exit 2
         fi
-        exec "$controller" --hardware 3 "$robot_interface" 0 "$config" "$model"
+        exec "$controller" --hardware 3 "$robot_interface" 0 "$config"
         ;;
     *) usage >&2; exit 2 ;;
 esac

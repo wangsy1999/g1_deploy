@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <filesystem>
 #include <memory>
 #include <limits>
 #include <stdexcept>
@@ -43,6 +44,9 @@ public:
     Policy(const std::string& model, const std::string& config)
         : env_(ORT_LOGGING_LEVEL_WARNING, "g1_locomotion") {
         const auto cfg = YAML::LoadFile(config);
+        const auto model_path = model.empty()
+            ? (std::filesystem::path(config).parent_path() / cfg["policy_path"].as<std::string>()).lexically_normal().string()
+            : model;
         ids_ = ReadArray<int, kJoints>(cfg["joint_ids_map"]);
         std::array<bool, kJoints> seen{};
         for (int id : ids_) {
@@ -111,7 +115,7 @@ public:
         options.SetIntraOpNumThreads(1);
         options.SetInterOpNumThreads(1);
         options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-        session_ = std::make_unique<Ort::Session>(env_, model.c_str(), options);
+        session_ = std::make_unique<Ort::Session>(env_, model_path.c_str(), options);
         const auto count = session_->GetInputCount();
         if ((count != 1 && count != 2) || session_->GetOutputCount() != 1)
             throw std::runtime_error("Expected history input, or current observation and history inputs, and one output");

@@ -64,7 +64,7 @@ def main():
         if initial is None:
             launcher = args.root / 'realsense'
             if not launcher.is_file():
-                launcher = args.root / 'scripts/realsense.sh'
+                launcher = args.root / 'apps/realsense/realsense.sh'
             logs = args.root / 'logs'
             logs.mkdir(exist_ok=True)
             log_path = logs / 'parkour-camera.log'

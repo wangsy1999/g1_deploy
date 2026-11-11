@@ -83,7 +83,7 @@ python="$deps/python/bin/python3"
 if [[ ! -e "$deps/python/lib/libpython3.10.so.1.0" ]]; then
     ln -s ../../runtime/python/lib/libpython3.10.so.1.0 "$deps/python/lib/libpython3.10.so.1.0"
 fi
-cp "$root/scripts/python3-realsense.sh" "$deps/python/bin/python3-realsense"
+cp "$root/apps/realsense/python3-realsense.sh" "$deps/python/bin/python3-realsense"
 chmod +x "$deps/python/bin/python3-realsense"
 "$python" -m pip install --no-index --find-links="$cache" \
     'pip==25.0.1' 'setuptools==75.9.1' 'wheel==0.48.0' \
@@ -126,7 +126,7 @@ PY
     (cd "$root/install" && ./g1 check && ./g1 parkour check)
 fi
 if ((verify_camera)); then
-    "$python" "$root/scripts/verify_robot_camera.py" --root "$root"
+    "$python" "$root/apps/realsense/verify_robot_camera.py" --root "$root"
 fi
 printf '\nSetup complete. No controller was started.\n'
 printf 'Run: cd "%s/install"\n' "$root"

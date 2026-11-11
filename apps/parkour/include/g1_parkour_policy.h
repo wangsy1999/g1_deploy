@@ -89,6 +89,10 @@ public:
 
     Policy(const std::string& models, const std::string& config) {
         const auto cfg=YAML::LoadFile(config);
+        auto model_path = [&](const char* key, const char* filename) {
+            if (!models.empty()) return (std::filesystem::path(models) / filename).string();
+            return (std::filesystem::path(config).parent_path() / cfg["models"][key].as<std::string>()).lexically_normal().string();
+        };
         const auto camera_config=std::filesystem::path(config).parent_path()/"realsense_parkour.json";
         if(std::filesystem::exists(camera_config)) raw_profile_=YAML::LoadFile(camera_config.string())["preprocessing"];
         neutral=Read<29>(cfg["default_joint_pos"]);
@@ -129,8 +133,8 @@ public:
             if(kp[i]<=0 || kd[i]<0) throw std::runtime_error("Invalid PD gains");
         }
         Ort::SessionOptions options; options.SetIntraOpNumThreads(1); options.SetInterOpNumThreads(1);
-        encoder_=std::make_unique<Ort::Session>(env_,(models+"/0-depth_encoder.onnx").c_str(),options);
-        actor_=std::make_unique<Ort::Session>(env_,(models+"/actor.onnx").c_str(),options);
+        encoder_=std::make_unique<Ort::Session>(env_,model_path("depth_encoder", "0-depth_encoder.onnx").c_str(),options);
+        actor_=std::make_unique<Ort::Session>(env_,model_path("actor", "actor.onnx").c_str(),options);
         Validate(*encoder_,{1,8,18,32},{1,128},encoder_in_,encoder_out_);
         Validate(*actor_,{1,896},{1,29},actor_in_,actor_out_);
     }

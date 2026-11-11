@@ -24,7 +24,7 @@ def main():
     sys.path.insert(0, str(sim))
     import config
     import parkour_observation
-    project_config = Path(__file__).resolve().parents[1]/"config/g1_parkour.json"
+    project_config = Path(__file__).resolve().parents[2]/"apps/parkour/config/g1_parkour.json"
     original = parkour_observation.ParkourObservationPublisher
 
     class Publisher(original):

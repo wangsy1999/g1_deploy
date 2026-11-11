@@ -17,16 +17,21 @@ The web monitor was synchronized from the tested robot deployment on 2026-10-19.
 It originates from `simulate_python/joint_monitor.py` and
 `simulate_python/web/joint_monitor.html` in the same `unitree_mujoco` commit above,
 with the onboard domain-0, dry-run telemetry and Chinese UI changes retained.
-In this repository it lives in `web/joint_monitor.py` and
-`web/static/joint_monitor.html`; only the static-resource path was adjusted.
-`scripts/monitor.sh` replaces the robot-specific absolute-path launcher with a
+In this repository it lives in `apps/monitor/joint_monitor.py` and
+`apps/monitor/static/joint_monitor.html`; only the static-resource path was adjusted.
+`apps/monitor/monitor.sh` replaces the robot-specific absolute-path launcher with a
 relocatable source/install launcher. Python SDK and CycloneDDS are external dependencies.
 
-Model: `models/policy.onnx`
+Model: `apps/dwaq/models/policy.onnx`
 SHA256: `4f23975849ef66d73a170ee3435a274a4c42dd31830f8b07161add84846a871d`
 
-Configuration: `config/g1_locomotion.yaml`
+Configuration: `apps/dwaq/config/g1_locomotion.json`
 Original SHA256: `09f7c133dc5e043aed7572d545e51f12dadf59cd11bcafa338e452c890db0c59`
-Current SHA256: `98841ae0ffb5ae209a0b9fbb70119025b598a828d08e163130d87c277cd29c48`
+Current SHA256: `037e745e714057e54d9a2d8b96950e7497c9bb472e9a28edfad23159eed71139`
 The current configuration removes the unused `hardware.joint_effort` field after
 removing the software estimated-PD-torque stop; policy parameters are unchanged.
+
+The DreamWaQ deployment configuration is now serialized as JSON with its parameter values retained.
+Parkour maintains its own `hardware` section in `apps/parkour/config/g1_parkour.json`; hardware settings are no longer shared between programs.
+
+Model paths are configured in each program's JSON, relative to the configuration directory.

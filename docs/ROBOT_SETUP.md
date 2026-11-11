@@ -53,7 +53,7 @@ cd install
 - NumPy 1.26.4、CycloneDDS Python 0.10.2、宇树 Python SDK、OpenCV headless 4.11.0.86、RealSense Python 2.55.1.6486。
 - `.deps/unitree-sdk2`、`.deps/cyclonedds`、`.deps/onnxruntime`：已在此机器人验证的 ARM64 原生库；构建不再依赖其它项目目录。
 - `.deps/glibc-2.35`：Ubuntu 官方 ARM64 glibc 2.35。只有相机专用 Python 入口通过它的动态加载器启动；不修改 `/lib`、`/usr/lib`、系统加载器或全局环境变量。
-- `scripts/python3-realsense.sh`：相机专用入口模板；由配置脚本复制到 `.deps/python/bin/python3-realsense`。网页监视器与控制程序继续使用原系统库。
+- `apps/realsense/python3-realsense.sh`：相机专用入口模板；由配置脚本复制到 `.deps/python/bin/python3-realsense`。网页监视器与控制程序继续使用原系统库。
 - 编译 Release、运行项目测试、安装到 `install/`，并完成两套模型的离线推理检查。已有安装会备份到 `deployment-backups/`，发现本项目控制程序正在运行则停止配置，需先由操作者退出程序。
 - 日志及包清单位于 `.deps/setup-logs/`。
 

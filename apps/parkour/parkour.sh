@@ -5,7 +5,7 @@ if [[ -x "$script_dir/bin/g1_parkour" ]]; then
     root_dir="$script_dir"
     controller="$root_dir/bin/g1_parkour"
 else
-    root_dir="$(cd -- "$script_dir/.." && pwd)"
+    root_dir="$(cd -- "$script_dir/../.." && pwd)"
     controller="$root_dir/build/g1_parkour"
 fi
 usage() {
@@ -17,7 +17,7 @@ usage() {
 mode="$1"; shift
 [[ -x "$controller" ]] || { echo "Missing executable: $controller" >&2; exit 1; }
 export LD_LIBRARY_PATH="$root_dir/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-common=(--model-dir "$root_dir/models/parkour" --config "$root_dir/config/g1_parkour.json" --limits "$root_dir/config/g1_locomotion.yaml")
+common=(--config "$root_dir/apps/parkour/config/g1_parkour.json")
 case "$mode" in
     check) exec "$controller" "${common[@]}" --check-policy "$@" ;;
     sim) exec "$controller" "${common[@]}" --sim --domain 1 --interface lo "$@" ;;
@@ -51,7 +51,7 @@ case "$mode" in
         for candidate in "$root_dir/.deps/python/bin/python3" "$root_dir/../.deps/python/bin/python3"; do
             if [[ -z "${PYTHON_BIN:-}" && -x "$candidate" ]]; then python="$candidate"; break; fi
         done
-        exec "$python" "$root_dir/camera/parkour_camera.py" --root "$root_dir" \
+        exec "$python" "$root_dir/apps/parkour/parkour_camera.py" --root "$root_dir" \
             --depth-port "$depth_port" --web-port "$web_port" -- \
             "$controller" "${common[@]}" --hardware --domain 0 --interface "$interface" "${options[@]}"
         ;;

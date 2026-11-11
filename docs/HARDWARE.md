@@ -24,7 +24,7 @@
 - 主IMU四元数、角速度及倾角检查。默认状态超时100ms，倾角上限1rad，温度阈值70°C。
   这些是本项目设置，不是厂商推荐阈值。状态验证失败锁定故障，需重启。
 - `hardware.limit_target_position`当前配置为`true`（缺省键为`false`）；开启后，将实机下发目标角夹紧到`joint_lower/joint_upper`（DDS顺序，单位rad），不额外缩小范围。
-  两种策略共用该设置，仅在启动时读取；修改配置后重启程序。变化率始终不限制，指令有限值检查始终保留。
+  DWaQ 从 `apps/dwaq/config/g1_locomotion.json`、Parkour 从 `apps/parkour/config/g1_parkour.json` 各自读取 `hardware` 设置，仅在启动时读取；修改配置后重启对应程序。变化率始终不限制，指令有限值检查始终保留。
   旧配置中的`target_rate_rad_s`和`joint_velocity`字段不再读取。
 - 不再根据q/dq与PD估算力矩，也不按估算值停止；旧`joint_effort`配置已移除。
   程序检查所有下发指令字段为有限数值，但不提供软件PD力矩幅值限制。

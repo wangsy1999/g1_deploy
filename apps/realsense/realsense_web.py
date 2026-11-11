@@ -22,7 +22,7 @@ import cv2
 import numpy as np
 
 HEADER = struct.Struct("<8sQdII")
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 CAPTURE_FREQUENCY_CHECK_INTERVAL = 500
 
 
@@ -466,7 +466,7 @@ def main():
     parser.add_argument("--color-height", type=int, default=240)
     parser.add_argument("--color-fps", type=int, default=30)
     parser.add_argument("--depth-port", type=int, default=0, help="Optional loopback parkour feed; 0 disables")
-    parser.add_argument("--profile", type=Path, default=ROOT/"config/realsense_parkour.json")
+    parser.add_argument("--profile", type=Path, default=ROOT/"apps/parkour/config/realsense_parkour.json")
     parser.add_argument("--token", default="", help="Optional HTTP Basic password (user: camera)")
     parser.add_argument("--mock", action="store_true")
     args = parser.parse_args()

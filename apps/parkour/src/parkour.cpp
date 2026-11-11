@@ -64,8 +64,8 @@ void ReleaseService() {
 
 int main(int argc,char** argv) {
     std::signal(SIGINT,Stop); std::signal(SIGTERM,Stop); std::signal(SIGHUP,Stop);
-    std::string models=G1_PARKOUR_DEFAULT_MODELS,config=G1_PARKOUR_DEFAULT_CONFIG;
-    std::string limits_config=G1_POLICY_DEFAULT_CONFIG,interface="lo",joystick;
+    std::string models,config=G1_PARKOUR_DEFAULT_CONFIG;
+    std::string limits_config,interface="lo",joystick;
     bool hardware=false,check=false,mode_set=false;
     int domain=1,port=0; double reset_seconds=3;
     try {
@@ -89,7 +89,7 @@ int main(int argc,char** argv) {
             else if(arg=="--help") {
                 std::cout<<"g1_parkour --sim [--domain 1 --interface lo --port 17200]\n"
                     <<"g1_parkour --hardware --domain 0 --interface ROBOT_IF [--port 17201]\n"
-                    <<"Common: --model-dir DIR --config JSON --limits YAML --reset-seconds 3 --check-policy\n"
+                    <<"Common: --model-dir DIR --config JSON --limits JSON --reset-seconds 3 --check-policy\n"
                     <<"Simulation F710: --joystick DEVICE; Start enable, X reset, A policy, Y zero, B stop. Hardware: Unitree Start enable, X reset, A policy, Select stop; direct sticks.\n"
                     <<"Startup is dry-run. p -> wait -> r previews targets; 9/Start hands over, clears preview, then p -> r again.\n"
                     <<"Verify camera pose, torso IMU axes and joint signs before Start handover.\n";
@@ -112,7 +112,7 @@ int main(int argc,char** argv) {
         }
         std::unique_ptr<g1_hardware::Limits> limits;
         if(hardware) {
-            limits=std::make_unique<g1_hardware::Limits>(YAML::LoadFile(limits_config));
+            limits=std::make_unique<g1_hardware::Limits>(YAML::LoadFile(limits_config.empty() ? config : limits_config));
             const auto pose=policy.DefaultDds();
             for(int i=0;i<29;++i) if(pose[i]<limits->lower[i]+.01f||pose[i]>limits->upper[i]-.01f)
                 throw std::runtime_error("Parkour reset pose exceeds hardware limits");
