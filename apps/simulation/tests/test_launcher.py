@@ -78,11 +78,37 @@ print(json.dumps(result))
     def test_legacy_entry_matches_shared_entry(self):
         self.assertEqual(self.configuration(), self.configuration(launcher=LEGACY))
 
+    def test_generated_terrain_is_temporary(self):
+        robot = self.root / "unitree_robots/g1"
+        scene = robot / "scene_29dof.xml"
+        source = '<mujoco><include file="g1_29dof.xml"/><worldbody><geom type="plane" size="0 0 .05"/></worldbody></mujoco>'
+        scene.write_text(source)
+        (robot / "g1_29dof.xml").write_text('<mujoco><worldbody/></mujoco>')
+        result = self.configuration("--terrain", "mixed")
+        self.assertNotEqual(result["scene"], str(scene))
+        self.assertFalse(Path(result["scene"]).exists(), "Generated scene was not cleaned up")
+        self.assertEqual(scene.read_text(), source, "External scene was changed")
+
+    def test_depth_preview(self):
+        # Fake the viewer API so launcher checks need neither graphics nor MuJoCo.
+        package = self.root / "simulate_python/mujoco"
+        package.mkdir()
+        (package / "__init__.py").touch()
+        (package / "viewer.py").write_text("class Handle:\n    def set_images(self, images): pass\ndef launch_passive(*args, **kwargs): pass\n")
+        self.assertTrue(self.configuration("--depth-preview")["preview"])
+        self.assertTrue(self.configuration("--depth-preview", launcher=LEGACY)["preview"])
+        result = self.launch("--no-depth", "--depth-preview")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("requires depth", result.stderr)
+
     def test_window_backend_selection(self):
         cases = [
             ((), {"DISPLAY": ":0", "XDG_SESSION_TYPE": "wayland"}, "x11"),
-            ((), {}, None),
-            ((), {"DISPLAY": ":0", "PYGLFW_LIBRARY_VARIANT": "wayland"}, "wayland"),
+            ((), {}, "x11"),
+            (("--window-backend", "auto"), {}, None),
+            (("--window-backend", "auto"), {"DISPLAY": ":0"}, "x11"),
+            ((), {"DISPLAY": ":0", "PYGLFW_LIBRARY_VARIANT": "wayland"}, "x11"),
+            (("--window-backend", "auto"), {"PYGLFW_LIBRARY_VARIANT": "wayland"}, "wayland"),
             (("--window-backend", "x11"), {"PYGLFW_LIBRARY_VARIANT": "wayland"}, "x11"),
             (("--window-backend", "wayland"), {"DISPLAY": ":0"}, "wayland"),
         ]

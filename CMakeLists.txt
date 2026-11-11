@@ -48,15 +48,27 @@ target_include_directories(g1_parkour PRIVATE "${REPOSITORY_ROOT}/apps/parkour/i
 target_link_libraries(g1_parkour PRIVATE unitree_sdk2 Boost::boost yaml-cpp "${ORT_LIBRARY}" ${OpenCV_LIBS} Threads::Threads)
 target_compile_definitions(g1_parkour PRIVATE
     G1_PARKOUR_DEFAULT_CONFIG="${REPOSITORY_ROOT}/apps/parkour/config/g1_parkour.json")
+add_executable(g1_hybrid
+    apps/hybrid/src/main.cpp apps/hybrid/src/options.cpp apps/hybrid/src/controller.cpp
+    apps/parkour/src/options.cpp apps/parkour/src/controller.cpp)
+target_include_directories(g1_hybrid PRIVATE apps/hybrid/include apps/dwaq/include apps/parkour/include
+    "${COMMON_INCLUDE}" "${ORT_INCLUDE}" ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(g1_hybrid PRIVATE unitree_sdk2 Boost::boost yaml-cpp "${ORT_LIBRARY}" ${OpenCV_LIBS} Threads::Threads)
+target_compile_definitions(g1_hybrid PRIVATE
+    G1_PARKOUR_DEFAULT_CONFIG="${REPOSITORY_ROOT}/apps/hybrid/config/g1_hybrid.json")
 # Launcher passes package-local resources. Keep ORT local after installation.
 set_target_properties(g1_dwaq PROPERTIES INSTALL_RPATH "$ORIGIN/../lib;${SDK_RUNTIME_DIR}")
 set_target_properties(g1_parkour PROPERTIES INSTALL_RPATH "$ORIGIN/../lib;${SDK_RUNTIME_DIR}")
+set_target_properties(g1_hybrid PROPERTIES INSTALL_RPATH "$ORIGIN/../lib;${SDK_RUNTIME_DIR}")
 if(UNIX AND NOT APPLE)
     target_link_options(g1_dwaq PRIVATE "-Wl,--disable-new-dtags")
     target_link_options(g1_parkour PRIVATE "-Wl,--disable-new-dtags")
+    target_link_options(g1_hybrid PRIVATE "-Wl,--disable-new-dtags")
 endif()
 
-install(TARGETS g1_dwaq g1_parkour RUNTIME DESTINATION bin)
+install(TARGETS g1_dwaq g1_parkour g1_hybrid RUNTIME DESTINATION bin)
+install(FILES apps/hybrid/config/g1_hybrid.json DESTINATION apps/hybrid/config)
+install(PROGRAMS apps/hybrid/hybrid.sh DESTINATION . RENAME hybrid)
 install(DIRECTORY "${REPOSITORY_ROOT}/apps/parkour/models" DESTINATION apps/parkour)
 install(FILES "${REPOSITORY_ROOT}/apps/parkour/config/g1_parkour.json" "${REPOSITORY_ROOT}/apps/parkour/config/realsense_parkour.json" DESTINATION apps/parkour/config)
 install(FILES "${REPOSITORY_ROOT}/apps/realsense/realsense_web.py" "${REPOSITORY_ROOT}/apps/realsense/requirements.txt" DESTINATION apps/realsense)
@@ -90,6 +102,16 @@ set(CPACK_PACKAGE_FILE_NAME "g1-deploy-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCE
 include(CPack)
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(g1_hybrid_policy_test apps/hybrid/tests/policy_test.cpp)
+    target_include_directories(g1_hybrid_policy_test PRIVATE apps/hybrid/include apps/dwaq/include apps/parkour/include
+        "${COMMON_INCLUDE}" "${ORT_INCLUDE}" ${OpenCV_INCLUDE_DIRS})
+    target_link_libraries(g1_hybrid_policy_test PRIVATE unitree_sdk2 yaml-cpp "${ORT_LIBRARY}" ${OpenCV_LIBS} Threads::Threads)
+    target_compile_definitions(g1_hybrid_policy_test PRIVATE
+        G1_HYBRID_TEST_CONFIG="${REPOSITORY_ROOT}/apps/hybrid/config/g1_hybrid.json"
+        G1_DWAQ_TEST_CONFIG="${REPOSITORY_ROOT}/apps/dwaq/config/g1_locomotion.json"
+        G1_PARKOUR_TEST_CONFIG="${REPOSITORY_ROOT}/apps/parkour/config/g1_parkour.json")
+    add_test(NAME hybrid_policy COMMAND g1_hybrid_policy_test)
+    set_tests_properties(hybrid_policy PROPERTIES TIMEOUT 15)
     add_executable(g1_control_components_test common/tests/control_components_test.cpp)
     target_include_directories(g1_control_components_test PRIVATE "${COMMON_INCLUDE}")
     target_link_libraries(g1_control_components_test PRIVATE unitree_sdk2 yaml-cpp Threads::Threads)

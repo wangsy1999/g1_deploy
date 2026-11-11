@@ -17,7 +17,7 @@ class LauncherTest(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         shutil.copy(ROOT / "g1", self.root / "g1")
-        for app, script in (("parkour", "parkour.sh"), ("dwaq", "g1.sh")):
+        for app, script in (("parkour", "parkour.sh"), ("dwaq", "g1.sh"), ("hybrid", "hybrid.sh")):
             destination = self.root / "apps" / app
             destination.mkdir(parents=True)
             shutil.copy(ROOT / "apps" / app / script, destination / script)
@@ -26,7 +26,7 @@ class LauncherTest(unittest.TestCase):
         self.fake.chmod(0o755)
         for layout in ("build", "bin"):
             (self.root / layout).mkdir()
-            for app in ("dwaq", "parkour"):
+            for app in ("dwaq", "parkour", "hybrid"):
                 shutil.copy(self.fake, self.root / layout / f"g1_{app}")
 
     def launch(self, *args, entry="g1"):
@@ -48,7 +48,11 @@ class LauncherTest(unittest.TestCase):
                 marker.unlink()
                 shutil.copy(ROOT / "apps/parkour/parkour.sh", self.root / "parkour")
                 (self.root / "parkour").chmod(0o755)
-            for app in ("dwaq", "parkour"):
+                shutil.copy(ROOT / "apps/hybrid/hybrid.sh", self.root / "hybrid")
+                (self.root / "hybrid").chmod(0o755)
+                # Installed wrappers identify the package from this resource.
+                (self.root / "apps/parkour/parkour_camera.py").touch()
+            for app in ("dwaq", "parkour", "hybrid"):
                 with self.subTest(source=source, app=app):
                     check = self.arguments(app, "check", "--config", "custom config.json")
                     self.assertIn("--check-policy", check)
@@ -63,8 +67,8 @@ class LauncherTest(unittest.TestCase):
         if not interfaces:
             self.skipTest("No non-loopback interface for launcher validation")
         interface = interfaces[0]
-        for app in ("dwaq", "parkour"):
-            options = ["--no-auto-camera"] if app == "parkour" else []
+        for app in ("dwaq", "parkour", "hybrid"):
+            options = ["--no-auto-camera"] if app != "dwaq" else []
             args = self.arguments(app, "real", interface, *options, "--config", "custom config.json")
             self.assertNotIn("--reset-seconds", args)
             self.assertIn("--hardware", args)
@@ -79,7 +83,7 @@ class LauncherTest(unittest.TestCase):
         self.assertEqual(camera[camera.index("--depth-port") + 1], "18001")
 
     def test_help_invalid_interface_and_legacy_entry(self):
-        for app in ("dwaq", "parkour"):
+        for app in ("dwaq", "parkour", "hybrid"):
             self.assertEqual(self.launch(app, "help").returncode, 0)
             self.assertEqual(self.launch(app, "real", "lo").returncode, 2)
             self.assertEqual(self.launch(app, "real").returncode, 2)

@@ -1,5 +1,6 @@
 // Parkour controller: synchronized observations, reset/hold and actuator lifecycle.
 #include "g1_parkour_controller.h"
+#include "g1_parkour_control_policy.h"
 #include "g1_loop_scheduler.h"
 #include "g1_dds_state_cache.h"
 #include "g1_monitor_publisher.h"
@@ -42,9 +43,34 @@ int CheckPolicy(g1_parkour::Policy& policy) {
     return 0;
 }
 
+// Preserve standalone Parkour behavior behind the reusable control-loop interface.
+class ParkourPolicy final : public ControlPolicy {
+public:
+    explicit ParkourPolicy(g1_parkour::Policy& policy) : policy_(policy) {}
+    const char* Name() const override { return "Parkour"; }
+    const g1_parkour::Policy& CameraPolicy() const override { return policy_; }
+    MotorTargets DefaultTargets() const override {
+        return {policy_.DefaultDds(), g1_joints::ToMotorOrder(policy_.kp, policy_.ids),
+                g1_joints::ToMotorOrder(policy_.kd, policy_.ids)};
+    }
+    void ClampVelocity(std::array<float, 3>& velocity) const override {
+        velocity[0] = std::clamp(velocity[0], 0.f, 1.f);
+        velocity[1] = 0;
+        velocity[2] = std::clamp(velocity[2], -1.f, 1.f);
+    }
+    MotorTargets Step(const ControlObservation& observation, const std::array<float, 3>& velocity) override {
+        auto result = DefaultTargets();
+        result.position = policy_.Step(observation, velocity);
+        return result;
+    }
+    void Reset() override { policy_.Reset(); }
+private:
+    g1_parkour::Policy& policy_;
+};
+
 class ParkourController {
 public:
-    ParkourController(const Options& options, g1_parkour::Policy& policy, double reset_duration)
+    ParkourController(const Options& options, ControlPolicy& policy, double reset_duration)
         : policy(policy), hardware(options.hardware), config(options.config),
           interface(options.interface), joystick(options.joystick), domain(options.domain), port(options.port),
           reset_seconds(reset_duration), states("rt/lowstate") {}
@@ -63,13 +89,13 @@ public:
                 const char key = ReadInput();
                 if (key == ' ') break;
                 HandleInput(key, now);
-                const double target_age_ms = UpdatePolicy(key);
+                UpdatePolicy(key);
                 PublishTargets(now);
-                PublishStatus(now, target_age_ms);
+                telemetry.PublishEnable(powered);
                 cycle.Sleep();
             }
         } catch (const std::exception& error) {
-            log.Line() << "Parkour stopped: " << error.what() << '\n';
+            log.Line() << policy.Name() << " stopped: " << error.what() << '\n';
             result = 1;
         }
         Stop();
@@ -80,7 +106,7 @@ private:
     void Initialize() {
         if(hardware) {
             limits=std::make_unique<g1_hardware::Limits>(YAML::LoadFile(config));
-            const auto pose=policy.DefaultDds();
+            const auto pose=policy.DefaultTargets().position;
             for(int i=0;i<29;++i) if(pose[i]<limits->lower[i]+.01f||pose[i]>limits->upper[i]-.01f)
                 throw std::runtime_error("Parkour reset pose exceeds hardware limits");
         }
@@ -98,15 +124,15 @@ private:
         telemetry.Start();
         keyboard=std::make_unique<g1_control::Keyboard>();
         command.mode_pr()=0;
-        neutral=policy.DefaultDds();
-        motor_kp=g1_joints::ToMotorOrder(policy.kp,policy.ids);
-        motor_kd=g1_joints::ToMotorOrder(policy.kd,policy.ids);
-        next_log=Clock::now();
+        const auto defaults = policy.DefaultTargets();
+        neutral = defaults.position;
+        motor_kp = defaults.kp;
+        motor_kd = defaults.kd;
         policy_worker=std::make_unique<PolicyWorker>(
             [&](const auto& observation,const auto& velocity) {return policy.Step(observation,velocity);},
             [&] {policy.Reset();}, !hardware);
         waiting = Clock::now();
-        log.Line()<<"Parkour source="<<(hardware?"RealSense + torso DDS IMU":"MuJoCo synchronized camera observations")
+        log.Line()<<policy.Name()<<" source="<<(hardware?"RealSense + torso DDS IMU":"MuJoCo synchronized camera observations")
                  <<"; loopback UDP "<<port<<"; DDS domain "<<domain<<".\n"
                  <<"DRY RUN: p reset, r policy; 9/Start enables real output and clears preview. Space/Select stops.\n";
     }
@@ -128,10 +154,10 @@ private:
             });
         } else {
             udp->Latest([&](const unsigned char* packet,std::size_t size) {
-                auto value=g1_parkour::Decode(packet,size,policy.signature);
+                auto value=g1_parkour::Decode(packet,size,policy.CameraPolicy().signature);
                 if(running && have_obs && value.time-last_time>.05)
                     throw std::runtime_error("Observation frames dropped; history timing invalid");
-                obs=value;last_time=value.time;
+                static_cast<g1_parkour::Observation&>(obs)=value;last_time=value.time;
                 have_obs=true;obs_at=now;
             });
         }
@@ -156,13 +182,14 @@ private:
         if(hardware) {
             if(powered) limits->CheckState(snapshot,1u<<3);
             else g1_hardware::CheckTelemetryState(snapshot);
-            obs=g1_parkour::HardwareObservation(policy,snapshot,imu,depth);
+            static_cast<g1_parkour::Observation&>(obs)=g1_parkour::HardwareObservation(policy.CameraPolicy(),snapshot,imu,depth);
             remote.Update(snapshot.wireless_remote());
         } else {
             if(snapshot.mode_machine()!=0&&snapshot.mode_machine()!=5) throw std::runtime_error("Expected G1 29DOF");
             for(int i=0;i<29;++i) if(!std::isfinite(snapshot.motor_state()[i].q())||!std::isfinite(snapshot.motor_state()[i].dq()))
                 throw std::runtime_error("Non-finite simulator state");
         }
+        obs.lowstate = snapshot;
         if(powered && snapshot.mode_machine()!=command.mode_machine()) throw std::runtime_error("Robot mode changed");
         return true;
     }
@@ -214,6 +241,9 @@ private:
 
     void BeginReset(Clock::time_point now) {
         start=g1_control::JointPositions(snapshot);
+        const auto defaults = policy.DefaultTargets();
+        motor_kp = defaults.kp;
+        motor_kd = defaults.kd;
         reset_at = now;
         active = true;
         holding = running = false;
@@ -224,7 +254,7 @@ private:
     }
 
     void TryStartPolicy() {
-        const bool near=g1_control::NearPose(obs.q,policy.neutral);
+        const bool near=g1_control::NearPose(g1_control::JointPositions(snapshot),neutral);
         if(!g1_control::InputReady(input))
             log.Line()<<"Center sticks before policy entry\n";
         else if(!powered||near) {
@@ -232,12 +262,11 @@ private:
             running = true;
             velocity.fill(0);
             if(input) input->BeginPolicy();
-            log.Line()<<"Parkour policy ON."<<(powered?" Output active.\n":" Dry-run only.\n");
+            log.Line()<<policy.Name()<<" policy ON."<<(powered?" Output active.\n":" Dry-run only.\n");
         } else log.Line()<<"Joints not near training pose; reset first\n";
     }
 
-    double UpdatePolicy(char key) {
-        double policy_target_age_ms=-1;
+    void UpdatePolicy(char key) {
         if(running) {
             if(!hardware) switch(key) {
                 case 'w':velocity[0]+=.1f;break;case 's':velocity[0]-=.1f;break;
@@ -245,20 +274,19 @@ private:
                 case 'x':velocity.fill(0);break;
             }
             if(input) velocity=input->ControlVelocity(hardware?0:key);
-            velocity[0] = std::clamp(velocity[0], 0.f, 1.f);
-            velocity[1] = 0;
-            velocity[2]=std::clamp(velocity[2],-1.f,1.f);
-            if((!hardware&&obs.height<.5)||obs.gravity[2]>-std::cos(1.))
+            policy.ClampVelocity(velocity);
+            // 仿真允许低姿态和跌倒调试；此处只检查真机的躯干倾角。
+            if(hardware && obs.gravity[2]>-std::cos(1.))
                 throw std::runtime_error("Torso height/tilt protection triggered");
             policy_worker->Submit(obs,velocity);
             if(auto latest=policy_worker->Latest()) {
-                target=latest->target;
-                policy_target_age_ms=std::chrono::duration<double,std::milli>(Clock::now()-latest->completed_at).count();
+                target=latest->target.position;
+                motor_kp=latest->target.kp;
+                motor_kd=latest->target.kd;
             }
             // Until the first result, keep the reset/hold target. Latest()
             // enforces the same 60ms watchdog for startup and later stalls.
         }
-        return policy_target_age_ms;
     }
 
     void PublishTargets(Clock::time_point now) {
@@ -266,7 +294,7 @@ private:
             if(!running) {
                 const double u=g1_control::ResetProgress(std::chrono::duration<double>(now-reset_at).count(),reset_seconds);
                 target=g1_control::InterpolateResetPose(start,neutral,u);
-                if(u==1&&!holding) {holding=true;log.Line()<<"Holding training pose; press r / remote A for parkour.\n";}
+                if(u==1&&!holding) {holding=true;log.Line()<<"Holding training pose; press r / remote A for policy.\n";}
             }
             g1_control::SetPositionTargets(command,target,motor_kp,motor_kd);
             if(powered) {
@@ -278,21 +306,6 @@ private:
         } else if(powered&&hardware) {
             g1_control::SetDampingTargets(command, true, limits->stop_kd);
             Send();
-        }
-    }
-
-    void PublishStatus(Clock::time_point now, double policy_target_age_ms) {
-        telemetry.PublishEnable(powered);
-        if(now>=next_log) {
-            auto entry=log.Line();
-            entry<<"[parkour] "<<(powered?"OUTPUT":"DRY")<<" "<<(running?"policy":holding?"hold":active?"reset":"waiting")
-                <<" camera_age_ms="<<(hardware ?
-                   (std::chrono::duration<double>(now.time_since_epoch()).count()-depth.captured_at)*1000 :
-                   std::chrono::duration<double,std::milli>(now-obs_at).count())
-                <<" policy_target_age_ms="<<policy_target_age_ms
-                <<" velocity=["<<velocity[0]<<",0,"<<velocity[2]<<"]";
-            if(input) entry<<" sticks=["<<input->Sticks()[0]<<','<<input->Sticks()[1]<<"]";
-            entry<<'\n';next_log=now+std::chrono::milliseconds(200);
         }
     }
 
@@ -324,8 +337,8 @@ private:
         keyboard.reset();
     }
 
-    using PolicyWorker = g1_inference::PolicyWorker<g1_parkour::Observation, g1_parkour::Joints>;
-    g1_parkour::Policy& policy;
+    using PolicyWorker = g1_inference::PolicyWorker<ControlObservation, MotorTargets>;
+    ControlPolicy& policy;
     const bool hardware;
     const std::string config, interface, joystick;
     const int domain, port;
@@ -347,11 +360,11 @@ private:
     Imu imu{};
     Cmd command{};
     bool powered=false, active=false, holding=false, running=false, publishing=false, have_obs=false;
-    g1_parkour::Observation obs;
+    ControlObservation obs;
     g1_parkour::DepthFrame depth;
     g1_parkour::Joints start{}, target{}, neutral{}, motor_kp{}, motor_kd{};
     std::array<float, 3> velocity{};
-    Clock::time_point obs_at{}, reset_at{}, next_log{}, waiting{};
+    Clock::time_point obs_at{}, reset_at{}, waiting{};
     double last_time = -1;
     // Declared last: destruction joins inference before its buffers/dependencies disappear.
     std::unique_ptr<PolicyWorker> policy_worker;
@@ -359,11 +372,16 @@ private:
 
 }  // namespace
 
+int RunControlLoop(const Options& options, ControlPolicy& policy, double reset_seconds) {
+    return ParkourController(options, policy, reset_seconds).Run();
+}
+
 int RunController(const Options& options) {
     g1_control::InstallSignalHandlers();
     g1_parkour::Policy policy(options.config);
     if (options.mode == Mode::CheckPolicy) return CheckPolicy(policy);
     const auto reset_seconds = g1_config::ReadResetSeconds(YAML::LoadFile(options.config));
-    return ParkourController(options, policy, reset_seconds).Run();
+    ParkourPolicy adapter(policy);
+    return RunControlLoop(options, adapter, reset_seconds);
 }
 }  // namespace g1_parkour_app

@@ -177,7 +177,7 @@ inline Observation HardwareObservation(const Policy& policy,
     std::copy_n(torso.gyroscope().begin(),3,obs.omega.begin());
     for(float v:obs.omega) if(!std::isfinite(v)) throw std::runtime_error("Invalid torso gyro");
     // Absolute torso height is not observable from this IMU/LowState input.
-    // Only simulation enables the absolute-height protection.
+    // The controller does not use absolute torso height as a simulation stop condition.
     obs.height=0;
     return obs;
 }

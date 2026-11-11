@@ -1,0 +1,33 @@
+{
+  "lane_width": 4.0,
+  "lane_spacing": 5.0,
+  "pit_depth": 1.0,
+  "start_length": 3.0,
+  "transition_length": 2.0,
+  "platforms": {
+    "heights": [0.10, 0.20, 0.30, 0.40, 0.50, 0.60],
+    "length": 1.2,
+    "spacing": 1.0
+  },
+  "stones": {
+    "heights": [0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.25, 0.15],
+    "radii": [0.26, 0.25, 0.24, 0.23, 0.22, 0.21, 0.23, 0.26],
+    "stride": 0.55,
+    "lateral_offset": 0.18
+  },
+  "gaps": {
+    "widths": [0.20, 0.35, 0.50, 0.65, 0.80, 1.00],
+    "landing_length": 1.8
+  },
+  "stairs": {
+    "rises": [0.08, 0.12, 0.16],
+    "steps": 4,
+    "tread_length": 0.45,
+    "landing_length": 0.9
+  },
+  "hurdles": {
+    "heights": [0.10, 0.20, 0.30, 0.40],
+    "thickness": 0.12,
+    "spacing": 1.5
+  }
+}

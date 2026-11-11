@@ -21,20 +21,21 @@ C++控制程序不依赖MuJoCo、ROS或Python；可选网页监控需要Python�
 | --- | --- | --- |
 | `g1_dwaq` / `apps/dwaq/src/main.cpp` | DreamWaQ 行走策略、姿态复位、硬件只读检查和手柄诊断 | `./g1 dwaq check`、`./g1 dwaq sim`、`./g1 dwaq real eth0` |
 | `g1_parkour` / `apps/parkour/src/main.cpp` | 深度编码器与动作网络双 ONNX 推理，支持 MuJoCo 或实机深度输入 | `./g1 parkour check`、`./g1 parkour sim`、`./g1 parkour real eth0` |
+| `g1_hybrid` / `apps/hybrid/src/main.cpp` | 站立、后退、原地转向使用 DWaQ，持续前进时切换到 Parkour | `./g1 hybrid check`、`./g1 hybrid sim`、`./g1 hybrid real eth0` |
 | `apps/monitor/joint_monitor.py` | 只读关节、IMU、实际/目标曲线及空跑目标网页 | `bash apps/monitor/monitor.sh eth0 0.0.0.0 8765` |
 | `apps/realsense/realsense_web.py` | RealSense 原始/策略深度预览、可选 RGB、本机深度 UDP 转发 | `bash apps/realsense/realsense.sh --host 0.0.0.0 --port 8766` |
 | `apps/parkour/parkour_camera.py` | 管理相机与控制器生命周期，等待新帧、复用兼容服务、保存相机日志 | 由 `bash apps/parkour/parkour.sh real eth0` 自动调用 |
 | `apps/simulation/sim.py` | 启动外部 MuJoCo 查看器，并加载本项目 Parkour 配置与相机桥接 | `python3 apps/simulation/sim.py --mujoco-root /path/to/unitree_mujoco` |
 
-根目录 `g1` 是两套控制器的统一入口，安装后仍为 `g1`；`apps/dwaq/g1.sh` 作为旧入口转发到它。`monitor.sh`、`realsense.sh`、`parkour.sh` 同时支持源码和安装目录，安装后分别命名为 `monitor`、`realsense`、`parkour`。仿真启动器 `apps/simulation/sim.py` 不随安装包安装，需从源码运行；旧入口 `apps/parkour/parkour_sim.py` 继续兼容。
+根目录 `g1` 是控制器的统一入口，安装后仍为 `g1`；`apps/dwaq/g1.sh` 作为旧入口转发到它。`monitor.sh`、`realsense.sh`、`parkour.sh` 同时支持源码和安装目录，安装后分别命名为 `monitor`、`realsense`、`parkour`。仿真启动器 `apps/simulation/sim.py` 不随安装包安装，需从源码运行；旧入口 `apps/parkour/parkour_sim.py` 继续兼容。
 
-两套控制器统一采用 `./g1 <程序> <模式> [参数]`：
+控制器统一采用 `./g1 <程序> <模式> [参数]`：
 
-| 模式 | DWaQ | Parkour |
-| --- | --- | --- |
-| 离线检查 | `./g1 dwaq check` | `./g1 parkour check` |
-| 仿真控制 | `./g1 dwaq sim` | `./g1 parkour sim` |
-| 实机控制 | `./g1 dwaq real eth0` | `./g1 parkour real eth0` |
+| 模式 | DWaQ | Parkour | Hybrid |
+| --- | --- | --- | --- |
+| 离线检查 | `./g1 dwaq check` | `./g1 parkour check` | `./g1 hybrid check` |
+| 仿真控制 | `./g1 dwaq sim` | `./g1 parkour sim` | `./g1 hybrid sim` |
+| 实机控制 | `./g1 dwaq real eth0` | `./g1 parkour real eth0` | `./g1 hybrid real eth0` |
 
 公共参数放在模式后，例如 `./g1 dwaq sim --domain 2`。默认读取各自 JSON 中的模型路径；Parkour 的 `--port` 和自动相机管理按其深度输入需求保留。`./g1 run eth0`、`./g1 check` 等旧命令仍兼容。
 
@@ -83,7 +84,30 @@ python3 apps/simulation/sim.py --mujoco-root /path/to/unitree_mujoco --domain 1 
 
 一次只运行一个控制器；切换策略时先停止当前控制器。入口默认发布 Parkour 深度观测，两套程序都可使用；仅运行 DWaQ 时可加 `--no-depth`，避免启动相机采样。仿真入口只修改当前 Python 进程配置，不改外部仓库文件。两套控制器均使用 `9 → p → 等待复位完成 → r` 控制仿真机器人。
 
-Linux 下检测到 `DISPLAY` 时，窗口默认使用 X11（Wayland 会话下通过 XWayland），避免 libdecor 插件加载失败造成标题栏缺失；已有 `PYGLFW_LIBRARY_VARIANT` 设置会保留。可用 `--window-backend x11` 或 `--window-backend wayland` 显式选择，需要重启仿真才能生效。
+启动仿真时加 `--depth-preview`，可在 MuJoCo 窗口右上角显示深度预览：左侧为原始 36×64 深度图，右侧为裁剪、模糊、归一化后的 18×32 模型输入，白框标记原始图的裁剪区域。预览会随窗口缩放，最多以 15 Hz 更新，复用已采样深度，不额外采样。需要支持 `Handle.set_images` 的 MuJoCo（当前环境 3.15.0 支持）及 OpenCV 图像处理功能，无需 OpenCV GUI；不能与 `--no-depth` 同用。省略该开关可关闭预览。
+
+加 `--follow` 可让主视角跟随机器人躯干位置，初始距离为 3 米；仍可用鼠标旋转和缩放。可与 `--depth-preview` 或 `--no-depth` 配合使用，不影响策略使用的深度相机。
+
+使用 `--terrain mixed` 启动新增的综合地形，或单独选择一类：
+
+| 参数 | 地形 |
+| --- | --- |
+| `--terrain platforms` | 10、20、30、40、50、60 cm 高台 |
+| `--terrain stones` | 高 10–35 cm、直径 42–52 cm 的交错梅花桩 |
+| `--terrain gaps` | 宽 20、35、50、65、80、100 cm 的沟槽，落地区长 1.8 m |
+| `--terrain stairs` | 台阶高度 8、12、16 cm 的三组上下楼梯 |
+| `--terrain hurdles` | 高 10、20、30、40 cm 的窄横栏 |
+| `--terrain mixed` | 五类并排独立通道，均沿 +X 前进 |
+| `--terrain original` | 外部仓库的原场景（默认） |
+
+```bash
+python apps/simulation/sim.py --mujoco-root /path/to/unitree_mujoco \
+  --terrain mixed --follow --depth-preview
+```
+
+综合场景的五类地形并排摆放，均从 X=3 m 开始：高台中心 Y=0、梅花桩 Y=5、gap Y=-5、楼梯 Y=10、横栏 Y=-10（单位米）。前方是连通各通道的起点广场，可先转向走到目标通道，再沿 +X 测试。通道宽 4 m，中心间距 5 m（`lane_spacing`）；沟槽与桩间底面低于行走面 1 m，未保留隐藏的上层平面。尺寸可在 [terrain.json](apps/simulation/terrain.json) 中调整。启动时打印各通道的 X 范围和 Y 中心坐标；地形临时生成，退出后清理，不修改外部机器人模型和场景文件。两套控制器共用这些地形，能否通过需按模型实际表现验证。
+
+窗口后端默认使用 `x11`（Wayland 会话下通过 XWayland），启动时无需额外指定，避免 libdecor 插件加载失败造成标题栏缺失。可用 `--window-backend wayland` 显式切换，或用 `--window-backend auto` 根据环境选择；auto 会保留已有 `PYGLFW_LIBRARY_VARIANT` 设置，否则在有 `DISPLAY` 时优先使用 X11。需要重启仿真才能生效。
 
 ### Parkour：离线推理、仿真和实机
 
@@ -118,6 +142,24 @@ python3 apps/parkour/parkour_camera.py --root "$PWD" --depth-port 17201 --web-po
 
 它仅复用深度端口匹配、持续有新帧的 Instinct 480×270/60 Hz 深度服务；旧配置或启用 RGB 的服务需先退出再重启。
 
+### 混合策略：DWaQ 站立/后退，Parkour 前进
+
+```bash
+./g1 hybrid check                       # 离线验证两种模型及双向切换
+./g1 hybrid sim --joystick /dev/input/js0 # 复用已启动的仿真，需保留深度观测
+./g1 hybrid real eth0                   # 真机默认原配遥控器，自动管理相机
+```
+
+启动后沿用空跑与接管流程；复位目标采用 DWaQ 默认姿态。F710 使用 `Start → X → 等待复位 → A`，`B` 停止；真机原配遥控器使用相同接管/复位/策略键，`Select` 停止。键盘为 `9 → p → 等待 → r`，`w/s` 增减前后速度，`x` 清零，空格停止。
+
+策略根据期望前进速度选择：默认使用 DWaQ；持续达到 0.15 m/s 满 0.2 秒后进入 Parkour；速度降到 0.05 m/s 或后退时选择 DWaQ。两阈值间保留当前模式，避免摇杆抖动反复切换。切换后的第一个推理结果直接使用新策略的目标角度、Kp 和 Kd，不做平滑混合。每个 20 ms 推理周期依次运行两套策略，持续更新双方的观测和动作历史，只发布当前选中策略的输出；模式切换不清空历史。
+
+配置在 [g1_hybrid.json](apps/hybrid/config/g1_hybrid.json)：`policies` 指向两份策略 JSON（相对混合配置目录解析），`switching` 设置切换阈值和前推确认时长，`reset_seconds` 与 `hardware` 是混合程序自己的运行参数。两份模型仍使用各自关节映射、归一化和 PD 增益；DWaQ 使用 LowState 的 pelvis IMU，Parkour 使用原来的 torso/深度观测。
+
+启动时，在初始化 DDS 和创建控制输出端之前，用虚拟站姿和深度图分别运行三个 ONNX 网络 `warmup_steps` 次（默认 10，必须为正整数）。预热结果全部丢弃，完成后清空两个策略的观测/动作历史和模式选择状态，正式从 DWaQ 开始。策略启用后，两套网络使用各自所需的最新实测状态持续推理，保留各自预测的上一次动作；未选中策略的预测不会发送给机器人。后退时 DWaQ 使用负前进速度，Parkour 使用零前进速度。复位和重新启动策略仍会清空双方历史。三个网络的总推理耗时继续受现有 20 ms 周期和结果超时检查约束。
+
+混合程序共用 Parkour 的 DDS、输入、监控、复位和停止循环，同一时刻只有一个控制输出端。站立/后退时仍要求相机/观测链路在线，数据过期会停止，不自动降级。已完成一次无窗口平地物理仿真：站立 5 秒、后退 3 秒、站立 3 秒、前进 3 秒、回到站立 3 秒，双策略持续推理、直接切换版本的最低躯干高度约 0.803 m，最大倾角约 0.097 rad，未检测到跌倒。该结果只覆盖这一段平地、给定初始姿态和指令；障碍物、交互操作及真机切换尚未完成行走验收。
+
 ### RealSense：查看相机与转发策略深度
 
 Python 依赖为 NumPy、OpenCV 和与目标设备匹配的 `pyrealsense2`，版本范围见 `apps/realsense/requirements.txt`；需要已可工作的 RealSense SDK/USB 相机。
@@ -141,7 +183,7 @@ bash apps/realsense/realsense.sh --mock --host 127.0.0.1 --port 8766
 Instinct 采集线程只负责取帧、写入最新原始深度共享内存并发送通知；缩放、裁剪、补洞及归一化在 C++ 策略的 50 Hz 观测处理中完成，高斯模糊默认关闭。策略从自身配置文件同目录的 `realsense_parkour.json` 读取预处理参数；相机网页应使用同一份配置。网页右侧在预览线程内独立运行同样的预处理，仅供查看；网页的伪彩色、预览滤波、拼图与 JPEG 编码由独立线程处理，默认最高 15 FPS，可用 `--preview-fps 10` 调整，不改变深度采集帧率。预览只保留一个待处理的最新帧，处理不及时就覆盖旧帧，不积压。状态中的 `age_ms` 是采集帧龄，`preview_age_ms` 是网页图像帧龄，`preview_error` 单独报告预览错误；预览失败不会停止策略数据发送。两个线程仍共享进程和 CPU，不保证硬实时。
 
 Instinct 原始深度通过本机 `/dev/shm/g1-depth-用户UID-深度端口` 共享内存保留最新 480×270 float32 米制图；`127.0.0.1` UDP 只发送带序号、采集时间戳及尺寸的 32 字节 `G1DEP003` 通知。读写使用文件锁，忙时跳过，接收端核对图像头与通知后才接纳，避免读取半帧或混用时间戳。相机和控制器须在同一主机以同一用户运行，先启动相机再启动控制器；自动入口已按此顺序启动，旧 `G1DEP002` 相机服务须重启。控制器每次策略更新读取最新原始图，处理后写入 60 项深度缓存并取 8 帧历史。网页继续使用 HTTP/MJPEG。legacy 模式保留原 UDP 米制小图通道。
-策略后处理和双网络推理在独立线程中按 20 ms 固定周期调度，控制线程按 2 ms 周期持续发送最新目标；输入与输出通过短时互斥锁交换快照，推理期间不持锁。策略线程独占历史缓存和复位操作；复位、接管和重新进入策略时清空目标并使上一轮在途结果失效。首个结果到达前保持站姿目标，首帧等待、结果年龄或结果所用输入快照年龄达到 60 ms 即停止；线程异常同样触发现有停止流程。真实输出时仍要求单次后处理与推理不超过 20 ms。日志增加 `policy_target_age_ms`（尚无结果为 -1）。仿真只对新的同步观测更新历史。两个循环错过周期时跳过该周期，避免集中补发；实际频率仍受系统调度和 DDS 发送耗时影响。
+策略后处理和双网络推理在独立线程中按 20 ms 固定周期调度，控制线程按 2 ms 周期持续发送最新目标；输入与输出通过短时互斥锁交换快照，推理期间不持锁。策略线程独占历史缓存和复位操作；复位、接管和重新进入策略时清空目标并使上一轮在途结果失效。首个结果到达前保持站姿目标，首帧等待、结果年龄或结果所用输入快照年龄达到 60 ms 即停止；线程异常同样触发现有停止流程。真实输出时仍要求单次后处理与推理不超过 20 ms。仿真只对新的同步观测更新历史。两个循环错过周期时跳过该周期，避免集中补发；实际频率仍受系统调度和 DDS 发送耗时影响。
 
 `--camera-mode legacy` 保留旧处理方式；仿真仍使用原观测协议与预处理，详细差异见 [Parkour 说明](docs/PARKOUR.md) 开头的相机链路对齐章节。
 多相机用 `--serial 序列号` 选择；`--profile` 指定预处理配置，`--width/--height/--fps` 选择设备支持的深度模式。

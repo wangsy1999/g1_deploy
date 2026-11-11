@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -x "$script_dir/bin/g1_parkour" ]]; then
+application="${G1_CONTROL_APP:-parkour}"
+case "$application" in parkour|hybrid) ;; *) echo 'Unknown control application' >&2; exit 2 ;; esac
+if [[ -x "$script_dir/bin/g1_$application" ]]; then
     root_dir="$script_dir"
-    controller="$root_dir/bin/g1_parkour"
+    controller="$root_dir/bin/g1_$application"
 else
     root_dir="$(cd -- "$script_dir/../.." && pwd)"
-    controller="$root_dir/build/g1_parkour"
+    controller="$root_dir/build/g1_$application"
 fi
 usage() {
     echo "Usage: $0 check [options] | sim [options] | real ROBOT_INTERFACE [options]"
@@ -29,7 +31,7 @@ if [[ "$mode" == help || "$mode" == --help ]]; then
 fi
 [[ -x "$controller" ]] || { echo "Missing executable: $controller" >&2; exit 1; }
 export LD_LIBRARY_PATH="$root_dir/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-common=(--config "$root_dir/apps/parkour/config/g1_parkour.json")
+common=(--config "$root_dir/apps/$application/config/g1_$application.json")
 case "$mode" in
     check) exec "$controller" "${common[@]}" --check-policy "$@" ;;
     sim) exec "$controller" "${common[@]}" --sim --domain 1 --interface lo "$@" ;;

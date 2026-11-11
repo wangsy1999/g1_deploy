@@ -5,10 +5,12 @@ Parkour can use the same environment; --no-depth selects DDS-only simulation.
 The physics engine, scene and dependencies remain in unitree_mujoco.
 """
 import argparse
+from contextlib import ExitStack
 import os
 from pathlib import Path
 import runpy
 import sys
+from tempfile import TemporaryDirectory
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -21,11 +23,20 @@ def main():
     parser.add_argument("--port", type=int, default=17200, help="Parkour observation UDP port")
     parser.add_argument("--depth", action=argparse.BooleanOptionalAction, default=True,
                         help="Publish Parkour depth observations (DWaQ ignores them)")
-    parser.add_argument("--window-backend", choices=("auto", "x11", "wayland"), default="auto",
-                        help="Window backend; auto prefers X11/XWayland when DISPLAY is available")
+    parser.add_argument("--depth-preview", action="store_true",
+                        help="Show raw and model-input depth images in the MuJoCo viewer's top-right corner")
+    parser.add_argument("--follow", action="store_true",
+                        help="Start with a camera tracking the robot torso")
+    parser.add_argument("--terrain", default="original",
+                        choices=("original", "mixed", "platforms", "stones", "gaps", "stairs", "hurdles"),
+                        help="Obstacle course; mixed places categories in parallel lanes (default: original external scene)")
+    parser.add_argument("--window-backend", choices=("auto", "x11", "wayland"), default="x11",
+                        help="Window backend (default: x11); auto prefers X11/XWayland when DISPLAY is available")
     args = parser.parse_args()
     if args.domain <= 0 or not 1024 <= args.port <= 65535:
         parser.error("Use a positive simulation domain and port 1024..65535")
+    if args.depth_preview and not args.depth:
+        parser.error("--depth-preview requires depth; remove --no-depth")
 
     root = args.mujoco_root.resolve()
     simulation = root / "simulate_python"
@@ -47,8 +58,17 @@ def main():
     if window_backend != "auto":
         os.environ["PYGLFW_LIBRARY_VARIANT"] = window_backend
     bridge = original_publisher = None
+    temporary_scene = None
     try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
         sys.path.insert(0, str(simulation))
+        if args.terrain != "original":
+            from terrain import generate_scene
+            temporary_scene = TemporaryDirectory(prefix="g1-terrain-")
+            scene = Path(temporary_scene.name) / "scene.xml"
+            sections = generate_scene(root, args.terrain, scene)
+            for category, start, end, y in sections:
+                print(f"Terrain {category}: x={start:.2f}..{end:.2f} m, lane center y={y:.2f} m, along +X", flush=True)
         import config
 
         if args.depth:
@@ -69,11 +89,18 @@ def main():
         config.USE_JOYSTICK = 0
         config.PARKOUR_OBSERVATIONS = args.depth
         config.PARKOUR_OBSERVATION_PORT = args.port
-        config.PARKOUR_DEPTH_PREVIEW = False
+        config.PARKOUR_DEPTH_PREVIEW = args.depth_preview
         print(f"Shared G1 simulation: DDS domain {args.domain}, interface lo, "
               f"depth {'on' if args.depth else 'off'}, window backend {window_backend}", flush=True)
         sys.argv = [str(simulator)]
-        runpy.run_path(str(simulator), run_name="__main__")
+        with ExitStack() as extensions:
+            if args.follow:
+                from viewer_camera import follow_robot
+                extensions.enter_context(follow_robot())
+            if args.depth_preview:
+                from viewer_depth_overlay import install_depth_overlay
+                extensions.enter_context(install_depth_overlay())
+            runpy.run_path(str(simulator), run_name="__main__")
     finally:
         if bridge is not None and original_publisher is not None:
             bridge.ParkourObservationPublisher = original_publisher
@@ -83,6 +110,8 @@ def main():
             os.environ.pop("PYGLFW_LIBRARY_VARIANT", None)
         else:
             os.environ["PYGLFW_LIBRARY_VARIANT"] = previous_backend
+        if temporary_scene is not None:
+            temporary_scene.cleanup()
 
 
 if __name__ == "__main__":

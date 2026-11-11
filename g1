@@ -11,11 +11,11 @@ config="$package_dir/apps/dwaq/config/g1_locomotion.json"
 usage() {
     cat <<'HELP'
 Usage:
-  ./g1 dwaq|parkour check [options]   Offline ONNX inference, no DDS
-  ./g1 dwaq|parkour sim [options]     Simulation controller (start MuJoCo separately)
-  ./g1 dwaq|parkour real ROBOT_INTERFACE [options]
+  ./g1 dwaq|parkour|hybrid check [options]   Offline ONNX inference, no DDS
+  ./g1 dwaq|parkour|hybrid sim [options]     Simulation controller (start MuJoCo separately)
+  ./g1 dwaq|parkour|hybrid real ROBOT_INTERFACE [options]
                                     Hardware control, Unitree remote by default
-  ./g1 dwaq|parkour help             Show usage
+  ./g1 dwaq|parkour|hybrid help             Show usage
 
 Options: --config JSON; sim also accepts --domain 1 --interface lo.
 Model paths, reset_seconds and hardware limits are configured in each program's JSON.
@@ -56,7 +56,7 @@ if [[ "$mode" == monitor ]]; then
     if [[ -x "$package_dir/monitor" ]]; then exec "$package_dir/monitor" "$@"; fi
     exec bash "$package_dir/apps/monitor/monitor.sh" "$@"
 fi
-if [[ "$mode" == realsense || "$mode" == parkour ]]; then
+if [[ "$mode" == realsense || "$mode" == parkour || "$mode" == hybrid ]]; then
     if [[ -x "$package_dir/$mode" ]]; then exec "$package_dir/$mode" "$@"; fi
     exec bash "$package_dir/apps/$mode/$mode.sh" "$@"
 fi
