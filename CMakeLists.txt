@@ -102,6 +102,14 @@ set(CPACK_PACKAGE_FILE_NAME "g1-deploy-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCE
 include(CPack)
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(g1_parkour_action_test apps/parkour/tests/action_feedback_test.cpp)
+    target_include_directories(g1_parkour_action_test PRIVATE apps/parkour/include
+        "${COMMON_INCLUDE}" "${ORT_INCLUDE}" ${OpenCV_INCLUDE_DIRS})
+    target_link_libraries(g1_parkour_action_test PRIVATE yaml-cpp "${ORT_LIBRARY}" ${OpenCV_LIBS})
+    target_compile_definitions(g1_parkour_action_test PRIVATE
+        G1_PARKOUR_TEST_CONFIG="${REPOSITORY_ROOT}/apps/parkour/config/g1_parkour.json")
+    add_test(NAME parkour_action COMMAND g1_parkour_action_test)
+    set_tests_properties(parkour_action PROPERTIES TIMEOUT 10)
     add_executable(g1_hybrid_policy_test apps/hybrid/tests/policy_test.cpp)
     target_include_directories(g1_hybrid_policy_test PRIVATE apps/hybrid/include apps/dwaq/include apps/parkour/include
         "${COMMON_INCLUDE}" "${ORT_INCLUDE}" ${OpenCV_INCLUDE_DIRS})

@@ -163,6 +163,8 @@
     50,
     50
   ],
+  "raw_clip": 100,
+  "clip_action_feedback": true,
   "action_scale": [
     0.43857731389829635,
     0.43857731389829635,

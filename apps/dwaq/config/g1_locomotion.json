@@ -33,6 +33,7 @@
     28
   ],
   "step_dt": 0.02,
+  "history_order": "time",
   "stiffness": [
     50,
     75,
@@ -47,8 +48,8 @@
     40,
     40,
     100,
-    75,
-    75,
+    50,
+    50,
     40,
     40,
     40,
@@ -149,7 +150,7 @@
     "JointPositionAction": {
       "raw_clip": 100,
       "clip_action_feedback": true,
-      "clip": [
+     "clip": [
         [
           -5,
           5

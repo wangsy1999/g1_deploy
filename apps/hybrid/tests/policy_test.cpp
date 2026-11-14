@@ -57,6 +57,45 @@ void CheckDwaqUnchanged() {
         Require(hybrid.SelectedMode() == Mode::Dwaq, "Idle/backward mode changed");
     }
 }
+void CheckDwaqTrainingHistory() {
+    g1_policy::Policy policy(G1_DWAQ_TEST_CONFIG);
+    g1_policy::State state;
+    state.q = policy.DefaultDds();
+    // Distinct full frames catch both term-major packing and reversed time order.
+    for (int tick = 1; tick <= 7; ++tick) {
+        state.omega = {float(tick), float(tick + 10), float(tick + 20)};
+        const auto history = policy.Observe(state, {float(tick), 0, 0});
+        for (int frame = 0; frame < 5; ++frame) {
+            const float expected = float(std::max(1, tick - 4 + frame));
+            Require(history[96 * frame] == expected && history[96 * frame + 1] == expected + 10 &&
+                    history[96 * frame + 5] == -1 && history[96 * frame + 6] == expected,
+                    "DWaQ history does not match training's oldest-first whole frames");
+        }
+    }
+    policy.Reset();
+    const auto reset_history = policy.Observe(state, {7, 0, 0});
+    for (int frame = 0; frame < 5; ++frame)
+        Require(reset_history[96 * frame] == 7, "DWaQ reset retained previous history");
+    Require(policy.kp[13] == 50 && policy.kp[14] == 50, "DWaQ waist gains differ from training");
+    g1_policy::Joints action{};
+    action.fill(1000);
+    const auto targets = policy.ProcessActions(action);
+    // 部署配置允许限制最终目标角度，不能固定假设目标始终不限幅。
+    const auto cfg = YAML::LoadFile(G1_DWAQ_TEST_CONFIG);
+    const auto action_cfg = cfg["actions"]["JointPositionAction"];
+    const auto ids = cfg["joint_ids_map"].as<std::vector<int>>();
+    for (int joint = 0; joint < 29; ++joint) {
+        const float raw_clip = action_cfg["raw_clip"].as<float>(std::numeric_limits<float>::max());
+        const float applied = std::clamp(action[joint], -raw_clip, raw_clip);
+        float expected = action_cfg["offset"][joint].as<float>() +
+                         action_cfg["scale"][joint].as<float>() * applied;
+        if (!action_cfg["clip"].IsNull()) {
+            expected = std::clamp(expected, action_cfg["clip"][joint][0].as<float>(),
+                                 action_cfg["clip"][joint][1].as<float>());
+        }
+        Require(targets[ids[joint]] == expected, "DWaQ target differs from configured action processing");
+    }
+}
 void CheckSwitchesAndReset() {
     g1_hybrid::Policy hybrid(G1_HYBRID_TEST_CONFIG);
     g1_parkour::Policy parkour(G1_PARKOUR_TEST_CONFIG);
@@ -119,7 +158,7 @@ void CheckWarmupDoesNotLeakHistory() {
 }  // namespace
 int main() {
     try {
-        CheckSelector(); CheckDwaqUnchanged(); CheckSwitchesAndReset(); CheckWarmupDoesNotLeakHistory();
+        CheckSelector(); CheckDwaqTrainingHistory(); CheckDwaqUnchanged(); CheckSwitchesAndReset(); CheckWarmupDoesNotLeakHistory();
         std::cout << "Hybrid selection, histories, gains and both real-model transitions passed\n";
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }
