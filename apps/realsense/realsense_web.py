@@ -1,18 +1,14 @@
-"""Read-only RealSense RGB/depth web test and optional local parkour depth feed.
+"""Read-only RealSense RGB/depth standalone web preview. Stop it before native C++ hardware control.
 
 No DDS imports, robot commands, Torch or GUI dependencies. --mock is explicitly
 synthetic and intended for HTTP/protocol checks without a connected camera.
 """
 import argparse
-import fcntl
-import mmap
-import os
 import json
 import math
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import secrets
-import socket
 import struct
 import threading
 import time
@@ -98,52 +94,6 @@ def instinct_depth(depth_m, profile):
     if image.shape != (18,32) or not np.isfinite(image).all():
         raise ValueError('Model requires a finite 18x32 depth image')
     return image.astype(np.float32)
-
-
-def depth_packet(image, sequence, captured_at, normalized=False):
-    if normalized:
-        if image.shape != (18,32) or not np.isfinite(image).all() or (image<0).any() or (image>1).any():
-            raise ValueError("Invalid normalized model depth")
-        return HEADER.pack(b"G1DEP002", sequence, captured_at, 32, 18) + image.astype("<f4").tobytes()
-    if image.shape != (36, 64) or np.isnan(image).any() or (image < 0).any():
-        raise ValueError("Invalid parkour depth image")
-    return HEADER.pack(b"G1DEP001", sequence, captured_at, 64, 36) + image.astype("<f4").tobytes()
-
-
-class RawDepthFeed:
-    """Latest raw depth in local shared memory; UDP carries only notifications."""
-    def __init__(self, port, width, height):
-        if (width, height) != (480, 270):
-            raise ValueError("Raw policy feed requires 480x270 depth")
-        self.path = Path(f"/dev/shm/g1-depth-{os.getuid()}-{port}")
-        self.owner = os.fdopen(os.open(self.path.with_suffix('.owner'), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600), 'r+b')
-        try:
-            fcntl.flock(self.owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            self.owner.close()
-            raise RuntimeError(f"Another camera owns depth port {port}")
-        self.file = os.fdopen(os.open(self.path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600), 'r+b')
-        self.file.truncate(HEADER.size + width*height*4)
-        self.memory = mmap.mmap(self.file.fileno(), 0)
-
-    def publish(self, depth, sequence, captured_at):
-        header = HEADER.pack(b"G1DEP003", sequence, captured_at, 480, 270)
-        try:
-            fcntl.flock(self.file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            return None
-        try:
-            self.memory[HEADER.size:] = depth.astype('<f4', copy=False).tobytes()
-            self.memory[:HEADER.size] = header
-        finally:
-            fcntl.flock(self.file, fcntl.LOCK_UN)
-        return header
-
-    def close(self):
-        self.memory.close()
-        self.file.close()
-        self.path.unlink(missing_ok=True)
-        self.owner.close()
 
 
 class Frames:
@@ -311,10 +261,6 @@ def capture(args, frames, stopping):
     pipeline = None
     pipeline_started = False
     preview = None
-    raw_feed = None
-    sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) if args.depth_port else None
-    if sender:
-        sender.setblocking(False)
     try:
         profile = json.loads(args.profile.read_text())
         if args.mock:
@@ -353,7 +299,7 @@ def capture(args, frames, stopping):
                     "depth_width": args.width, "depth_height": args.height,
                     "color_width": args.color_width, "color_height": args.color_height,
                     "color_fps": args.color_fps if args.color else 0, "color_enabled": args.color,
-                    "camera_mode": args.camera_mode, "depth_protocol": "G1DEP003" if args.camera_mode=="instinct" else "G1DEP001",
+                    "camera_mode": args.camera_mode,
                     "depth_scale_m": depth_scale, "intrinsics": intrinsics,
                     "distortion_model": str(intr.model)}
             if any(abs(float(v)) > 1e-8 for v in intr.coeffs):
@@ -372,8 +318,6 @@ def capture(args, frames, stopping):
             filtered = fill.process(filtered)
             return np.asanyarray(filtered.get_data()).astype(np.float32)*depth_scale
 
-        if sender and args.camera_mode == "instinct":
-            raw_feed = RawDepthFeed(args.depth_port, args.width, args.height)
         preview = PreviewWorker(args, frames, render_depth)
         sequence, last_frame = 0, None
         frame_clock = FrameClock()
@@ -411,25 +355,13 @@ def capture(args, frames, stopping):
                     frequency_count = 0
                     frequency_started_at = measured_at
             coverage = None
-            if sender:
-                if raw_feed is not None:
-                    packet = raw_feed.publish(depth, sequence, captured_at)
-                else:
-                    policy_depth, coverage = project_depth(depth, intrinsics, profile)
-                    packet = depth_packet(policy_depth, sequence, captured_at)
-                if packet is not None:
-                    try:
-                        sender.sendto(packet, ("127.0.0.1", args.depth_port))
-                    except BlockingIOError:
-                        pass
             sequence += 1
             frames.captured({**info, "policy_fov_coverage": coverage,
                              "capture_time_monotonic": captured_at,
-                             "depth_udp_port": args.depth_port,
                              "capture_fps": capture_fps,
                              "preview_fps": args.preview_fps,
                           "postprocessing_preview": ("Instinct model input: nearest resize/crop/inpaint/" + ("Gaussian/" if profile["preprocessing"].get("gaussian_kernel") else "") + "normalize") if args.camera_mode=="instinct" else "disparity → spatial → temporal → depth → hole filling" if not args.mock else "synthetic; filters bypassed",
-                          "policy_depth_source": "raw 480x270 shared memory; preprocessing on policy side" if args.camera_mode=="instinct" else "legacy raw depth",
+                          "policy_depth_source": "standalone preview; controller uses native C++ capture" if args.camera_mode=="instinct" else "legacy raw depth",
                           "camera_mount_verification": "operator confirmed; not measurable by this script"})
             preview.submit(depth, color, df if not args.mock else None, captured_at)
             # RealSense arrival drives capture, as in instinct_onboard. Only
@@ -443,12 +375,8 @@ def capture(args, frames, stopping):
     finally:
         if preview is not None:
             preview.close()
-        if raw_feed is not None:
-            raw_feed.close()
         if pipeline_started:
             pipeline.stop()
-        if sender:
-            sender.close()
 
 
 def main():
@@ -465,17 +393,12 @@ def main():
     parser.add_argument("--color-width", type=int, default=424)
     parser.add_argument("--color-height", type=int, default=240)
     parser.add_argument("--color-fps", type=int, default=30)
-    parser.add_argument("--depth-port", type=int, default=0, help="Optional loopback parkour feed; 0 disables")
     parser.add_argument("--profile", type=Path, default=ROOT/"apps/parkour/config/realsense_parkour.json")
     parser.add_argument("--token", default="", help="Optional HTTP Basic password (user: camera)")
     parser.add_argument("--mock", action="store_true")
     args = parser.parse_args()
     if min(args.preview_fps, args.fps, args.width, args.height, args.color_fps, args.color_width, args.color_height) <= 0 or not 1 <= args.port <= 65535:
         parser.error("Invalid size, FPS or HTTP port")
-    if args.depth_port and not 1024 <= args.depth_port <= 65535:
-        parser.error("Depth UDP port must be 1024..65535")
-    if args.mock and args.depth_port:
-        parser.error("Synthetic images cannot be forwarded to a robot policy")
     frames, stopping = Frames(args.token), threading.Event()
     server = make_server(frames, args.host, args.port)
     worker = threading.Thread(target=capture, args=(args, frames, stopping), daemon=True)

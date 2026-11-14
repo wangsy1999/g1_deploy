@@ -72,7 +72,7 @@ class ParkourController {
 public:
     ParkourController(const Options& options, ControlPolicy& policy, double reset_duration)
         : policy(policy), hardware(options.hardware), config(options.config),
-          interface(options.interface), joystick(options.joystick), domain(options.domain), port(options.port),
+          interface(options.interface), joystick(options.joystick), domain(options.domain),
           reset_seconds(reset_duration), states("rt/lowstate") {}
 
     int Run() {
@@ -112,8 +112,8 @@ private:
         }
         if(!joystick.empty()) gamepad=std::make_unique<g1_gamepad::Device>(joystick,false,false);
         input=hardware?&remote.state:gamepad?&gamepad->state:nullptr;
-        if(hardware) camera=std::make_unique<g1_parkour::DepthReceiver>(port);
-        else udp=std::make_unique<g1_parkour::UdpInput>(port);
+        if(hardware) camera=std::make_unique<g1_camera::RealSenseCamera>();
+        else simulation=std::make_unique<g1_parkour::SharedInput>("observation", 32 + 2369 * sizeof(float));
         unitree::robot::ChannelFactory::Instance()->Init(domain,interface);
         states.Start();
         if(hardware) {
@@ -132,8 +132,8 @@ private:
             [&](const auto& observation,const auto& velocity) {return policy.Step(observation,velocity);},
             [&] {policy.Reset();}, !hardware);
         waiting = Clock::now();
-        log.Line()<<policy.Name()<<" source="<<(hardware?"RealSense + torso DDS IMU":"MuJoCo synchronized camera observations")
-                 <<"; loopback UDP "<<port<<"; DDS domain "<<domain<<".\n"
+        log.Line()<<policy.Name()<<" source="<<(hardware?"C++ RealSense USB + torso DDS IMU":"MuJoCo synchronized camera observations")
+                 <<"; "<<(hardware?"in-process depth cache":"local shared memory")<<"; DDS domain "<<domain<<".\n"
                  <<"DRY RUN: p reset, r policy; 9/Start enables real output and clears preview. Space/Select stops.\n";
     }
 
@@ -148,13 +148,17 @@ private:
         const bool torso_fresh=torso.valid && now-torso.received_at<std::chrono::milliseconds(100);
         const double state_age_ms=lowstate.AgeMs(now),torso_age_ms=torso.AgeMs(now);
         if(hardware) {
-            camera->Latest([&](const g1_parkour::DepthFrame& value,Clock::time_point received) {
-                depth=value;last_time=value.captured_at;
-                have_obs=true;obs_at=received;
-            });
+            if (const auto sample = camera->Latest()) {
+                depth = sample->frame;
+                last_time = depth.captured_at;
+                have_obs = true;
+                obs_at = sample->received_at;
+            }
         } else {
-            udp->Latest([&](const unsigned char* packet,std::size_t size) {
+            simulation->Latest([&](const unsigned char* packet,std::size_t size) {
                 auto value=g1_parkour::Decode(packet,size,policy.CameraPolicy().signature);
+                if(have_obs && (value.sequence <= obs.sequence || value.time <= last_time))
+                    throw std::runtime_error("Simulation stream restarted or replayed; restart controller");
                 if(running && have_obs && value.time-last_time>.05)
                     throw std::runtime_error("Observation frames dropped; history timing invalid");
                 static_cast<g1_parkour::Observation&>(obs)=value;last_time=value.time;
@@ -341,14 +345,14 @@ private:
     ControlPolicy& policy;
     const bool hardware;
     const std::string config, interface, joystick;
-    const int domain, port;
+    const int domain;
     const double reset_seconds;
     std::unique_ptr<g1_hardware::Limits> limits;
     std::unique_ptr<g1_gamepad::Device> gamepad;
     g1_unitree_remote::Input remote;
     g1_gamepad::State* input = nullptr;
-    std::unique_ptr<g1_parkour::UdpInput> udp;
-    std::unique_ptr<g1_parkour::DepthReceiver> camera;
+    std::unique_ptr<g1_parkour::SharedInput> simulation;
+    std::unique_ptr<g1_camera::RealSenseCamera> camera;
     g1_control::DdsStateCache<State> states;
     std::unique_ptr<g1_control::DdsStateCache<Imu>> imus;
     std::unique_ptr<g1_control::CommandMonitor> monitor;

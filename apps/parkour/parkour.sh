@@ -12,16 +12,16 @@ else
 fi
 usage() {
     echo "Usage: $0 check [options] | sim [options] | real ROBOT_INTERFACE [options]"
-    echo 'real automatically starts/reuses camera + depth UDP; --no-auto-camera disables this.'
+    echo 'real opens RealSense directly in the C++ controller; no Python camera process.'
     echo 'real starts in dry-run with Unitree remote input. Press Start for real output handover.'
 }
 (($#)) || { usage; exit 0; }
 mode="$1"; shift
-# Reject removed overrides before starting a camera service.
+# Reject obsolete overrides before starting the controller.
 for argument in "$@"; do
     case "$argument" in
-        --model|--model-dir|--limits|--unitree-remote|--reset-seconds)
-            echo "Removed option: $argument; use the program JSON configuration." >&2; exit 2 ;;
+        --model|--model-dir|--limits|--unitree-remote|--reset-seconds|--port|--channel|--depth-port|--depth-channel|--no-auto-camera|--camera-web-port)
+            echo "Removed option: $argument; transport is automatic; other settings use the program JSON configuration." >&2; exit 2 ;;
     esac
 done
 if [[ "$mode" == help || "$mode" == --help ]]; then
@@ -41,36 +41,10 @@ case "$mode" in
         if [[ "${1:-}" == remote ]]; then
             echo 'The remote argument was removed; hardware uses the Unitree remote by default.' >&2; exit 2
         fi
-        auto_camera=1
-        web_port=8766
-        depth_port=17201
-        options=()
-        while (($#)); do
-            case "$1" in
-                --no-auto-camera) auto_camera=0; shift ;;
-                --help|--check-policy) auto_camera=0; options+=("$1"); shift ;;
-                --camera-web-port)
-                    (($# >= 2)) || { echo 'Missing camera web port' >&2; exit 2; }
-                    web_port="$2"; shift 2 ;;
-                --port)
-                    (($# >= 2)) || { echo 'Missing depth UDP port' >&2; exit 2; }
-                    depth_port="$2"; options+=("$1" "$2"); shift 2 ;;
-                *) options+=("$1"); shift ;;
-            esac
-        done
         [[ "$interface" != lo && -d "/sys/class/net/$interface" ]] || {
             echo "Specify the actual robot network interface." >&2; exit 2;
         }
-        if (( ! auto_camera )); then
-            exec "$controller" "${common[@]}" --hardware --domain 0 --interface "$interface" "${options[@]}"
-        fi
-        python="${PYTHON_BIN:-python3}"
-        for candidate in "$root_dir/.deps/python/bin/python3" "$root_dir/../.deps/python/bin/python3"; do
-            if [[ -z "${PYTHON_BIN:-}" && -x "$candidate" ]]; then python="$candidate"; break; fi
-        done
-        exec "$python" "$root_dir/apps/parkour/parkour_camera.py" --root "$root_dir" \
-            --depth-port "$depth_port" --web-port "$web_port" -- \
-            "$controller" "${common[@]}" --hardware --domain 0 --interface "$interface" "${options[@]}"
+        exec "$controller" "${common[@]}" --hardware --domain 0 --interface "$interface" "$@"
         ;;
     *) usage >&2; exit 2 ;;
 esac

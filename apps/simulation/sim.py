@@ -20,7 +20,6 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mujoco-root", type=Path, required=True)
     parser.add_argument("--domain", type=int, default=1)
-    parser.add_argument("--port", type=int, default=17200, help="Parkour observation UDP port")
     parser.add_argument("--depth", action=argparse.BooleanOptionalAction, default=True,
                         help="Publish Parkour depth observations (DWaQ ignores them)")
     parser.add_argument("--depth-preview", action="store_true",
@@ -33,8 +32,8 @@ def main():
     parser.add_argument("--window-backend", choices=("auto", "x11", "wayland"), default="x11",
                         help="Window backend (default: x11); auto prefers X11/XWayland when DISPLAY is available")
     args = parser.parse_args()
-    if args.domain <= 0 or not 1024 <= args.port <= 65535:
-        parser.error("Use a positive simulation domain and port 1024..65535")
+    if args.domain <= 0:
+        parser.error("Use a positive simulation domain")
     if args.depth_preview and not args.depth:
         parser.error("--depth-preview requires depth; remove --no-depth")
 
@@ -46,8 +45,6 @@ def main():
         parser.error("Missing external simulate_python/unitree_mujoco.py")
     if not scene.is_file():
         parser.error("Missing external unitree_robots/g1/scene_29dof.xml")
-    if args.depth and not (simulation / "parkour_observation.py").is_file():
-        parser.error("Depth mode requires simulate_python/parkour_observation.py; use --no-depth for DWaQ only")
 
     previous_path, previous_argv = sys.path[:], sys.argv
     previous_backend = os.environ.get("PYGLFW_LIBRARY_VARIANT")
@@ -60,8 +57,8 @@ def main():
     bridge = original_publisher = None
     temporary_scene = None
     try:
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
         sys.path.insert(0, str(simulation))
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
         if args.terrain != "original":
             from terrain import generate_scene
             temporary_scene = TemporaryDirectory(prefix="g1-terrain-")
@@ -77,8 +74,8 @@ def main():
             project_config = PROJECT_ROOT / "apps/parkour/config/g1_parkour.json"
 
             class Publisher(original_publisher):
-                def __init__(self, model, data, port=args.port, config_path=None):
-                    super().__init__(model, data, port, project_config)
+                def __init__(self, model, data, port=None, config_path=None):
+                    super().__init__(model, data, config_path=project_config)
 
             bridge.ParkourObservationPublisher = Publisher
 
@@ -88,7 +85,7 @@ def main():
         config.DOMAIN_ID, config.INTERFACE = args.domain, "lo"
         config.USE_JOYSTICK = 0
         config.PARKOUR_OBSERVATIONS = args.depth
-        config.PARKOUR_OBSERVATION_PORT = args.port
+        config.PARKOUR_OBSERVATION_PORT = None # 外部启动接口的旧参数，不再使用网络
         config.PARKOUR_DEPTH_PREVIEW = args.depth_preview
         print(f"Shared G1 simulation: DDS domain {args.domain}, interface lo, "
               f"depth {'on' if args.depth else 'off'}, window backend {window_backend}", flush=True)

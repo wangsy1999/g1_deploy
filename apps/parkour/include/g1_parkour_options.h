@@ -10,7 +10,6 @@ struct Options : g1_control::RuntimeOptions {
     Mode mode = Mode::Control;
     std::string program;
     int help_exit_code = 0;
-    int port = 0;
     std::string joystick;
 };
 

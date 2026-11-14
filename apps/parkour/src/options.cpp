@@ -13,8 +13,7 @@ Options ParseOptions(int argc, char** argv) {
         const std::string arg = argv[i];
         if (g1_control::ParseRuntimeOption(argc, argv, i, options, state)) continue;
         auto value = [&] { return g1_control::OptionValue(argc, argv, i, arg); };
-        if (arg == "--port") options.port = g1_control::ParseInteger(value());
-        else if (arg == "--joystick") options.joystick = value();
+        if (arg == "--joystick") options.joystick = value();
         else if (arg == "--check-policy") options.mode = Mode::CheckPolicy;
         else if (arg == "--help") {
             options.mode = Mode::Help;
@@ -22,9 +21,6 @@ Options ParseOptions(int argc, char** argv) {
         } else throw std::invalid_argument("Unknown argument: " + arg);
     }
     g1_control::ValidateRuntimeOptions(options);
-    if (!options.port) options.port = options.hardware ? 17201 : 17200;
-    if (options.port < 1024 || options.port > 65535)
-        throw std::invalid_argument("UDP port must be 1024..65535");
     if (options.hardware && (options.interface == "lo" || !if_nametoindex(options.interface.c_str()) ||
                              !options.joystick.empty()))
         throw std::invalid_argument("Hardware requires a non-loopback robot interface and the Unitree remote");
@@ -32,8 +28,8 @@ Options ParseOptions(int argc, char** argv) {
 }
 
 void PrintUsage(const std::string&) {
-    std::cout<<"g1_parkour --sim [--domain 1 --interface lo --port 17200]\n"
-        <<"g1_parkour --hardware --domain 0 --interface ROBOT_IF [--port 17201]\n"
+    std::cout<<"g1_parkour --sim [--domain 1 --interface lo]\n"
+        <<"g1_parkour --hardware --domain 0 --interface ROBOT_IF\n"
         <<"Common: --config JSON --check-policy; model paths, reset_seconds and hardware limits come from JSON\n"
         <<"Simulation F710: --joystick DEVICE; Start enable, X reset, A policy, Y zero, B stop. Hardware: Unitree Start enable, X reset, A policy, Select stop; direct sticks.\n"
         <<"Startup is dry-run. p -> wait -> r previews targets; 9/Start hands over, clears preview, then p -> r again.\n"

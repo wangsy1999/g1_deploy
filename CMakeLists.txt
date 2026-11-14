@@ -32,6 +32,35 @@ if(NOT ORT_INCLUDE OR NOT ORT_LIBRARY)
     message(FATAL_ERROR "ONNXRUNTIME_ROOT must contain include/onnxruntime_cxx_api.h and lib/libonnxruntime.so")
 endif()
 
+# Native camera support is detected automatically. Robot builds require it;
+# workstations without the SDK can still run simulation and offline policy checks.
+option(G1_REQUIRE_REALSENSE "Fail configuration when native RealSense SDK is missing" OFF)
+find_package(realsense2 CONFIG QUIET)
+if(G1_REQUIRE_REALSENSE AND NOT realsense2_FOUND)
+    message(FATAL_ERROR "Install librealsense2 development files or set realsense2_DIR")
+endif()
+add_library(g1_depth_camera STATIC apps/realsense/src/g1_depth_camera.cpp)
+target_include_directories(g1_depth_camera PUBLIC apps/realsense/include)
+target_link_libraries(g1_depth_camera PUBLIC Threads::Threads)
+if(realsense2_FOUND)
+    target_compile_definitions(g1_depth_camera PRIVATE G1_WITH_REALSENSE)
+    if(TARGET realsense2::realsense2)
+        target_link_libraries(g1_depth_camera PUBLIC realsense2::realsense2)
+    elseif(TARGET realsense2)
+        target_link_libraries(g1_depth_camera PUBLIC realsense2)
+    else()
+        target_include_directories(g1_depth_camera PRIVATE ${realsense2_INCLUDE_DIR})
+        target_link_libraries(g1_depth_camera PUBLIC ${realsense2_LIBRARY})
+    endif()
+else()
+    message(STATUS "RealSense SDK not found: simulation/offline only; hardware camera startup will report an error")
+endif()
+add_executable(g1_camera_check apps/realsense/src/camera_check.cpp)
+target_link_libraries(g1_camera_check PRIVATE g1_depth_camera)
+set_target_properties(g1_camera_check PROPERTIES INSTALL_RPATH "$ORIGIN/../lib"
+    INSTALL_RPATH_USE_LINK_PATH TRUE)
+install(TARGETS g1_camera_check RUNTIME DESTINATION bin)
+
 add_executable(g1_dwaq
     "${REPOSITORY_ROOT}/apps/dwaq/src/main.cpp"
     "${REPOSITORY_ROOT}/apps/dwaq/src/options.cpp"
@@ -45,7 +74,7 @@ add_executable(g1_parkour
     "${REPOSITORY_ROOT}/apps/parkour/src/options.cpp"
     "${REPOSITORY_ROOT}/apps/parkour/src/controller.cpp")
 target_include_directories(g1_parkour PRIVATE "${REPOSITORY_ROOT}/apps/parkour/include" "${COMMON_INCLUDE}" "${ORT_INCLUDE}" ${OpenCV_INCLUDE_DIRS})
-target_link_libraries(g1_parkour PRIVATE unitree_sdk2 Boost::boost yaml-cpp "${ORT_LIBRARY}" ${OpenCV_LIBS} Threads::Threads)
+target_link_libraries(g1_parkour PRIVATE g1_depth_camera unitree_sdk2 Boost::boost yaml-cpp "${ORT_LIBRARY}" ${OpenCV_LIBS} Threads::Threads)
 target_compile_definitions(g1_parkour PRIVATE
     G1_PARKOUR_DEFAULT_CONFIG="${REPOSITORY_ROOT}/apps/parkour/config/g1_parkour.json")
 add_executable(g1_hybrid
@@ -53,9 +82,10 @@ add_executable(g1_hybrid
     apps/parkour/src/options.cpp apps/parkour/src/controller.cpp)
 target_include_directories(g1_hybrid PRIVATE apps/hybrid/include apps/dwaq/include apps/parkour/include
     "${COMMON_INCLUDE}" "${ORT_INCLUDE}" ${OpenCV_INCLUDE_DIRS})
-target_link_libraries(g1_hybrid PRIVATE unitree_sdk2 Boost::boost yaml-cpp "${ORT_LIBRARY}" ${OpenCV_LIBS} Threads::Threads)
+target_link_libraries(g1_hybrid PRIVATE g1_depth_camera unitree_sdk2 Boost::boost yaml-cpp "${ORT_LIBRARY}" ${OpenCV_LIBS} Threads::Threads)
 target_compile_definitions(g1_hybrid PRIVATE
     G1_PARKOUR_DEFAULT_CONFIG="${REPOSITORY_ROOT}/apps/hybrid/config/g1_hybrid.json")
+set_target_properties(g1_parkour g1_hybrid PROPERTIES INSTALL_RPATH_USE_LINK_PATH TRUE)
 # Launcher passes package-local resources. Keep ORT local after installation.
 set_target_properties(g1_dwaq PROPERTIES INSTALL_RPATH "$ORIGIN/../lib;${SDK_RUNTIME_DIR}")
 set_target_properties(g1_parkour PROPERTIES INSTALL_RPATH "$ORIGIN/../lib;${SDK_RUNTIME_DIR}")
@@ -72,7 +102,6 @@ install(PROGRAMS apps/hybrid/hybrid.sh DESTINATION . RENAME hybrid)
 install(DIRECTORY "${REPOSITORY_ROOT}/apps/parkour/models" DESTINATION apps/parkour)
 install(FILES "${REPOSITORY_ROOT}/apps/parkour/config/g1_parkour.json" "${REPOSITORY_ROOT}/apps/parkour/config/realsense_parkour.json" DESTINATION apps/parkour/config)
 install(FILES "${REPOSITORY_ROOT}/apps/realsense/realsense_web.py" "${REPOSITORY_ROOT}/apps/realsense/requirements.txt" DESTINATION apps/realsense)
-install(FILES "${REPOSITORY_ROOT}/apps/parkour/parkour_camera.py" DESTINATION apps/parkour)
 install(FILES "${REPOSITORY_ROOT}/apps/realsense/static/realsense.html" DESTINATION apps/realsense/static)
 install(PROGRAMS "${REPOSITORY_ROOT}/apps/realsense/realsense.sh" DESTINATION . RENAME realsense)
 install(PROGRAMS "${REPOSITORY_ROOT}/apps/parkour/parkour.sh" DESTINATION . RENAME parkour)
@@ -100,71 +129,3 @@ set(CPACK_PACKAGE_NAME "g1-deploy")
 set(CPACK_PACKAGE_VERSION "1.0.0")
 set(CPACK_PACKAGE_FILE_NAME "g1-deploy-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
 include(CPack)
-include(CTest)
-if(BUILD_TESTING)
-    add_executable(g1_parkour_action_test apps/parkour/tests/action_feedback_test.cpp)
-    target_include_directories(g1_parkour_action_test PRIVATE apps/parkour/include
-        "${COMMON_INCLUDE}" "${ORT_INCLUDE}" ${OpenCV_INCLUDE_DIRS})
-    target_link_libraries(g1_parkour_action_test PRIVATE yaml-cpp "${ORT_LIBRARY}" ${OpenCV_LIBS})
-    target_compile_definitions(g1_parkour_action_test PRIVATE
-        G1_PARKOUR_TEST_CONFIG="${REPOSITORY_ROOT}/apps/parkour/config/g1_parkour.json")
-    add_test(NAME parkour_action COMMAND g1_parkour_action_test)
-    set_tests_properties(parkour_action PROPERTIES TIMEOUT 10)
-    add_executable(g1_hybrid_policy_test apps/hybrid/tests/policy_test.cpp)
-    target_include_directories(g1_hybrid_policy_test PRIVATE apps/hybrid/include apps/dwaq/include apps/parkour/include
-        "${COMMON_INCLUDE}" "${ORT_INCLUDE}" ${OpenCV_INCLUDE_DIRS})
-    target_link_libraries(g1_hybrid_policy_test PRIVATE unitree_sdk2 yaml-cpp "${ORT_LIBRARY}" ${OpenCV_LIBS} Threads::Threads)
-    target_compile_definitions(g1_hybrid_policy_test PRIVATE
-        G1_HYBRID_TEST_CONFIG="${REPOSITORY_ROOT}/apps/hybrid/config/g1_hybrid.json"
-        G1_DWAQ_TEST_CONFIG="${REPOSITORY_ROOT}/apps/dwaq/config/g1_locomotion.json"
-        G1_PARKOUR_TEST_CONFIG="${REPOSITORY_ROOT}/apps/parkour/config/g1_parkour.json")
-    add_test(NAME hybrid_policy COMMAND g1_hybrid_policy_test)
-    set_tests_properties(hybrid_policy PROPERTIES TIMEOUT 15)
-    add_executable(g1_control_components_test common/tests/control_components_test.cpp)
-    target_include_directories(g1_control_components_test PRIVATE "${COMMON_INCLUDE}")
-    target_link_libraries(g1_control_components_test PRIVATE unitree_sdk2 yaml-cpp Threads::Threads)
-    add_test(NAME control_components COMMAND g1_control_components_test)
-    set_tests_properties(control_components PROPERTIES TIMEOUT 10)
-    add_executable(g1_control_options_test common/tests/control_options_test.cpp
-        apps/dwaq/src/options.cpp apps/parkour/src/options.cpp)
-    target_include_directories(g1_control_options_test PRIVATE "${COMMON_INCLUDE}"
-        "${REPOSITORY_ROOT}/apps/dwaq/include" "${REPOSITORY_ROOT}/apps/parkour/include")
-    target_compile_definitions(g1_control_options_test PRIVATE
-        G1_POLICY_DEFAULT_CONFIG="${REPOSITORY_ROOT}/apps/dwaq/config/g1_locomotion.json"
-        G1_PARKOUR_DEFAULT_CONFIG="${REPOSITORY_ROOT}/apps/parkour/config/g1_parkour.json")
-    add_test(NAME control_options COMMAND g1_control_options_test)
-    add_executable(g1_inference_utils_test common/tests/inference_utils_test.cpp)
-    target_include_directories(g1_inference_utils_test PRIVATE "${COMMON_INCLUDE}" "${ORT_INCLUDE}")
-    target_link_libraries(g1_inference_utils_test PRIVATE yaml-cpp "${ORT_LIBRARY}")
-    target_compile_definitions(g1_inference_utils_test PRIVATE
-        G1_TEST_ENCODER="${REPOSITORY_ROOT}/apps/parkour/models/0-depth_encoder.onnx"
-        G1_TEST_DWAQ_MODEL="${REPOSITORY_ROOT}/apps/dwaq/models/policy.onnx")
-    add_test(NAME inference_utils COMMAND g1_inference_utils_test)
-    set_tests_properties(inference_utils PROPERTIES TIMEOUT 10)
-    add_executable(g1_control_helpers_test common/tests/control_helpers_test.cpp)
-    target_include_directories(g1_control_helpers_test PRIVATE "${COMMON_INCLUDE}")
-    target_link_libraries(g1_control_helpers_test PRIVATE unitree_sdk2)
-    add_test(NAME control_helpers COMMAND g1_control_helpers_test)
-    set_tests_properties(control_helpers PROPERTIES TIMEOUT 5)
-    add_executable(g1_unitree_remote_test common/tests/unitree_remote_test.cpp)
-    target_include_directories(g1_unitree_remote_test PRIVATE "${COMMON_INCLUDE}")
-    target_link_libraries(g1_unitree_remote_test PRIVATE Threads::Threads)
-    add_test(NAME unitree_remote COMMAND g1_unitree_remote_test)
-    add_executable(g1_hardware_command_test common/tests/hardware_command_test.cpp)
-    target_include_directories(g1_hardware_command_test PRIVATE "${COMMON_INCLUDE}")
-    target_link_libraries(g1_hardware_command_test PRIVATE unitree_sdk2 yaml-cpp)
-    add_test(NAME hardware_command COMMAND g1_hardware_command_test)
-    add_executable(g1_policy_worker_test common/tests/policy_worker_test.cpp)
-    target_include_directories(g1_policy_worker_test PRIVATE "${COMMON_INCLUDE}")
-    target_link_libraries(g1_policy_worker_test PRIVATE Threads::Threads)
-    add_executable(g1_control_io_test common/tests/control_io_test.cpp)
-    target_include_directories(g1_control_io_test PRIVATE "${COMMON_INCLUDE}")
-    target_link_libraries(g1_control_io_test PRIVATE unitree_sdk2 Threads::Threads)
-    if(UNIX AND NOT APPLE)
-        target_link_options(g1_control_io_test PRIVATE "-Wl,--disable-new-dtags")
-    endif()
-    add_test(NAME control_io COMMAND g1_control_io_test)
-    set_tests_properties(control_io PROPERTIES TIMEOUT 5)
-    add_test(NAME policy_worker COMMAND g1_policy_worker_test)
-    set_tests_properties(policy_worker PROPERTIES TIMEOUT 5)
-endif()

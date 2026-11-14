@@ -19,13 +19,13 @@ Usage:
 
 Options: --config JSON; sim also accepts --domain 1 --interface lo.
 Model paths, reset_seconds and hardware limits are configured in each program's JSON.
-Parkour real automatically manages its depth camera; --no-auto-camera disables this.
+Parkour/Hybrid real open RealSense directly in C++; no camera transport parameters.
 The same commands work in the source checkout and installed package.
 Legacy DWaQ shortcuts remain available:
   ./g1 check                         Offline ONNX inference, no DDS
   ./g1 interfaces                    Show local network interfaces and route to control PC
   ./g1 monitor INTERFACE [HOST] [PORT] Start the read-only web monitor (Python dependencies needed)
-  ./g1 realsense [options]           Read-only RGB/depth web test, optional local depth feed
+  ./g1 realsense [options]           Standalone RGB/depth web preview (stop before hardware control)
   ./g1 parkour check|sim|real ...     Dual-network parkour inference (separate executable)
   ./g1 joystick [DEVICE]             Read-only F710 input check, no DDS
   ./g1 read-only ROBOT_INTERFACE      Subscribe to hardware state, no commands or mode release

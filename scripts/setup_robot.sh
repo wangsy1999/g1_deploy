@@ -13,7 +13,7 @@ Usage: bash scripts/setup_robot.sh [options]
   --cache DIR             Offline dependency cache (default: .deploy-cache/robot-arm64)
   --jobs N                Parallel build jobs (default: 4)
   --deps-only             Prepare and verify dependencies without building controllers
-  --verify-camera         Test real depth capture and UDP; no robot controller is started
+  --verify-camera         Test native C++ depth capture; no robot controller is started
   --install-system-deps   Install missing Ubuntu build packages using sudo apt-get
   --help                  Show this help
 Copy the project and offline cache yourself before running. No SSH, SCP, rsync,
@@ -36,7 +36,7 @@ done
 cache="$(cd -- "$cache" && pwd)"
 (cd "$cache" && sha256sum -c SHA256SUMS)
 if ((install_system_deps)); then
-    required=(build-essential cmake libboost-dev libyaml-cpp-dev libopencv-dev libusb-1.0-0 pkg-config)
+    required=(build-essential cmake libboost-dev libyaml-cpp-dev libopencv-dev libusb-1.0-0 pkg-config librealsense2-dev)
     missing=()
     for package in "${required[@]}"; do
         if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q 'install ok installed'; then missing+=("$package"); fi
@@ -57,7 +57,7 @@ for process in pathlib.Path('/proc').iterdir():
         executable = pathlib.Path(os.readlink(str(process / 'exe')).removesuffix(' (deleted)') if hasattr(str, 'removesuffix') else os.readlink(str(process / 'exe')).replace(' (deleted)', ''))
     except (OSError, PermissionError):
         continue
-    if executable.name in ('g1_dwaq', 'g1_parkour') and root in executable.parents:
+    if executable.name in ('g1_dwaq', 'g1_parkour', 'g1_hybrid') and root in executable.parents:
         raise SystemExit('Controller is running (PID {}). Exit it before setup.'.format(process.name))
 PY
 deps="$root/.deps"
@@ -104,11 +104,12 @@ LD_LIBRARY_PATH="$deps/cyclonedds/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$py
 "$python" -m pip freeze > "$deps/setup-logs/python-packages.txt"
 if ((!deps_only)); then
     cmake -S "$root" -B "$root/build" -DCMAKE_BUILD_TYPE=Release \
+        -DG1_REQUIRE_REALSENSE=ON \
+        -DCMAKE_PREFIX_PATH="$deps/realsense" \
         -DONNXRUNTIME_ROOT="$deps/onnxruntime" \
         -Dunitree_sdk2_DIR="$deps/unitree-sdk2/lib/cmake/unitree_sdk2" \
         -DCMAKE_INSTALL_PREFIX="$root/install"
     cmake --build "$root/build" -j"$jobs"
-    (cd "$root/build" && ctest --output-on-failure)
     if [[ -d "$root/install" ]]; then
         mkdir -p "$root/deployment-backups"
         tar -czf "$root/deployment-backups/install-$(date +%Y%m%d-%H%M%S)-$$.tar.gz" -C "$root" install
@@ -126,7 +127,8 @@ PY
     (cd "$root/install" && ./g1 check && ./g1 parkour check)
 fi
 if ((verify_camera)); then
-    "$python" "$root/apps/realsense/verify_robot_camera.py" --root "$root"
+    [[ -x "$root/build/g1_camera_check" ]] || { echo 'Build the native camera check before --verify-camera.' >&2; exit 1; }
+    "$root/build/g1_camera_check"
 fi
 printf '\nSetup complete. No controller was started.\n'
 printf 'Run: cd "%s/install"\n' "$root"

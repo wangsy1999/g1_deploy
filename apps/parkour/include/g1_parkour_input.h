@@ -1,157 +1,94 @@
 #pragma once
 #include "g1_parkour_policy.h"
+#include "g1_depth_camera.h"
 #include <unitree/idl/hg/LowState_.hpp>
 #include <unitree/idl/hg/IMUState_.hpp>
-#include <arpa/inet.h>
-#include <sys/socket.h>
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <cerrno>
-#include <atomic>
-#include <chrono>
-#include <exception>
-#include <mutex>
-#include <thread>
 
 namespace g1_parkour {
-struct DepthFrame {
-    uint64_t sequence = 0;
-    std::shared_ptr<const std::vector<float>> raw_depth;
-    bool normalized=false;
-    double captured_at = 0; // CLOCK_MONOTONIC, same Linux host as the controller
-    std::array<float,36*64> image{};
-};
-inline DepthFrame DecodeDepth(const unsigned char* bytes, std::size_t size) {
-    const bool normalized=size==32+18*32*4 && !std::memcmp(bytes,"G1DEP002",8);
-    if (!normalized && (size != 32+36*64*4 || std::memcmp(bytes,"G1DEP001",8)))
-        throw std::runtime_error("Invalid RealSense depth packet");
-    DepthFrame frame;
-    uint32_t width=0,height=0;
-    std::memcpy(&frame.sequence,bytes+8,8);
-    std::memcpy(&frame.captured_at,bytes+16,8);
-    std::memcpy(&width,bytes+24,4); std::memcpy(&height,bytes+28,4);
-    frame.normalized=normalized;
-    if (width!=(normalized?32:64) || height!=(normalized?18:36) || !std::isfinite(frame.captured_at))
-        throw std::runtime_error("RealSense dimensions/timestamp mismatch");
-    std::memcpy(frame.image.data(),bytes+32,(normalized?18*32:36*64)*4);
-    for (float d : frame.image)
-        if (std::isnan(d) || d<0 || (normalized && (!std::isfinite(d)||d>1))) throw std::runtime_error("Invalid RealSense depth");
-    return frame;
-}
-
-inline DepthFrame ReadRawDepth(int fd,const unsigned char* bytes,std::size_t size) {
-    if(size!=32 || std::memcmp(bytes,"G1DEP003",8)) throw std::runtime_error("Invalid raw depth notification");
-    uint32_t width=0,height=0;
-    std::memcpy(&width,bytes+24,4);std::memcpy(&height,bytes+28,4);
-    if(width!=480||height!=270) throw std::runtime_error("Invalid raw depth dimensions");
-    DepthFrame frame;
-    std::memcpy(&frame.sequence,bytes+8,8);std::memcpy(&frame.captured_at,bytes+16,8);
-    if(!std::isfinite(frame.captured_at)) throw std::runtime_error("Invalid raw depth timestamp");
-    auto raw=std::make_shared<std::vector<float>>(480*270);
-    if(flock(fd,LOCK_SH|LOCK_NB)) {
-        if(errno==EWOULDBLOCK) return frame;
-        throw std::runtime_error("Cannot lock raw depth shared memory");
-    }
-    // Allocation precedes the lock so capture only competes with the copy.
-    std::array<unsigned char,32> header{};
-    const auto header_size=pread(fd,header.data(),header.size(),0);
-    const auto data_size=pread(fd,raw->data(),raw->size()*sizeof(float),32);
-    flock(fd,LOCK_UN);
-    if(header_size!=32 || data_size!=static_cast<ssize_t>(raw->size()*sizeof(float)))
-        throw std::runtime_error("Incomplete raw depth shared memory");
-    // A newer frame may already have replaced this notification's image.
-    // Wait for its own notification rather than mixing timestamps/images.
-    if(std::memcmp(header.data(),bytes,32)) return frame;
-    for(float d:*raw) if(!std::isfinite(d)||d<0) throw std::runtime_error("Invalid raw depth");
-    frame.raw_depth=raw;
-    return frame;
-}
-
-class UdpInput {
-    int fd_=-1;
+using DepthFrame = g1_camera::DepthFrame;
+// 同机同用户的最新帧邮箱。生产者独占 .owner 锁，读者只接受活跃生产者的数据。
+// 文件锁覆盖帧头和数据的整次复制；锁忙或序号未变时跳过，不阻塞控制循环。
+class SharedInput {
+    std::string path_;
+    std::size_t size_;
+    int fd_ = -1;
+    int owner_fd_ = -1;
+    int reader_fd_ = -1;
+    std::array<unsigned char, 32> last_header_{};
+    bool have_header_ = false;
 public:
-    explicit UdpInput(int port) {
-        fd_=socket(AF_INET,SOCK_DGRAM|SOCK_NONBLOCK|SOCK_CLOEXEC,0);
-        if(fd_<0) throw std::runtime_error("Cannot create input socket");
-        sockaddr_in address{}; address.sin_family=AF_INET;
-        address.sin_port=htons(port); address.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
-        if(bind(fd_,reinterpret_cast<sockaddr*>(&address),sizeof(address))) {
-            close(fd_); throw std::runtime_error("Cannot bind loopback input port; another controller running?");
+    SharedInput(const std::string& kind, std::size_t size, const std::string& directory = "/dev/shm")
+        : path_(directory + "/g1-" + kind + "-" + std::to_string(getuid())),
+          size_(size) {
+        // 与原来的独占接收端口一样，每类输入只允许一个控制器消费。
+        reader_fd_ = open((path_ + ".reader").c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+        if (reader_fd_ < 0) throw std::runtime_error("Cannot open shared input reader lock");
+        if (flock(reader_fd_, LOCK_EX | LOCK_NB)) {
+            close(reader_fd_);
+            throw std::runtime_error("Shared input already has a controller");
         }
     }
-    ~UdpInput() {if(fd_>=0) close(fd_);}
-    UdpInput(const UdpInput&)=delete;
-    UdpInput& operator=(const UdpInput&)=delete;
-    template<class Decode> bool Latest(Decode decode) {
-        bool fresh=false;
-        std::array<unsigned char,65536> packet{};
-        for(int i=0;i<64;++i) {
-            auto n=recv(fd_,packet.data(),packet.size(),0);
-            if(n<0) {
-                if(errno==EAGAIN || errno==EWOULDBLOCK) break;
-                if(errno==EINTR) continue;
-                throw std::runtime_error("Input receive failed");
-            }
-            decode(packet.data(),static_cast<std::size_t>(n)); fresh=true;
-        }
-        return fresh;
+    ~SharedInput() {
+        if (fd_ >= 0) close(fd_);
+        if (owner_fd_ >= 0) close(owner_fd_);
+        if (reader_fd_ >= 0) close(reader_fd_);
     }
-};
+    SharedInput(const SharedInput&) = delete;
+    SharedInput& operator=(const SharedInput&) = delete;
 
-
-// Continuously drain UDP even while the control thread performs service handover.
-// Only the newest decoded frame is retained, together with its actual receive time.
-class DepthReceiver {
-    UdpInput input_;
-    int raw_fd_=-1;
-    std::atomic<bool> running_{true};
-    std::mutex mutex_;
-    DepthFrame latest_{};
-    std::chrono::steady_clock::time_point received_{};
-    bool have_=false,pending_=false;
-    std::exception_ptr error_;
-    std::thread worker_;
-public:
-    explicit DepthReceiver(int port):input_(port) {
-        const auto path="/dev/shm/g1-depth-"+std::to_string(getuid())+"-"+std::to_string(port);
-        raw_fd_=open(path.c_str(),O_RDONLY|O_CLOEXEC|O_NOFOLLOW);
-        // Legacy UDP sources do not need shared memory.
-        worker_=std::thread([this] {
-        try {
-            while(running_) {
-                input_.Latest([this](const unsigned char* bytes,std::size_t size) {
-                    const bool raw=size>=8 && !std::memcmp(bytes,"G1DEP003",8);
-                    if(raw && raw_fd_<0) throw std::runtime_error("Raw depth shared memory unavailable; start camera first");
-                    auto frame=raw ? ReadRawDepth(raw_fd_,bytes,size) : DecodeDepth(bytes,size);
-                    if(raw && !frame.raw_depth) return;
-                    auto received=std::chrono::steady_clock::now();
-                    std::lock_guard<std::mutex> lock(mutex_);
-                    if(have_ && (frame.sequence<=latest_.sequence || frame.captured_at<=latest_.captured_at))
-                        throw std::runtime_error("RealSense stream restarted or replayed; restart controller");
-                    latest_=frame;received_=received;have_=pending_=true;
-                });
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            }
-        } catch(...) {
-            std::lock_guard<std::mutex> lock(mutex_);
-            error_=std::current_exception();running_=false;
-        }
-        });
-    }
-    ~DepthReceiver() {running_=false;if(worker_.joinable()) worker_.join();if(raw_fd_>=0) close(raw_fd_);}
-    DepthReceiver(const DepthReceiver&)=delete;
-    DepthReceiver& operator=(const DepthReceiver&)=delete;
     template<class Consume> bool Latest(Consume consume) {
-        DepthFrame frame;std::chrono::steady_clock::time_point received;
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            if(error_) std::rethrow_exception(error_);
-            if(!pending_) return false;
-            frame=latest_;received=received_;pending_=false;
+        if (owner_fd_ < 0) {
+            owner_fd_ = open((path_ + ".owner").c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+            if (owner_fd_ < 0) {
+                if (errno == ENOENT) return false; // 允许控制器先于生产者启动。
+                throw std::runtime_error("Cannot open shared input owner");
+            }
         }
-        consume(frame,received);return true;
+        if (flock(owner_fd_, LOCK_SH | LOCK_NB) == 0) {
+            flock(owner_fd_, LOCK_UN);
+            return false; // 生产者已退出，不能把残留文件当作新观测。
+        }
+        if (errno != EWOULDBLOCK) throw std::runtime_error("Cannot check shared input owner");
+        if (fd_ < 0) {
+            fd_ = open(path_.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+            if (fd_ < 0) {
+                if (errno == ENOENT) return false;
+                throw std::runtime_error("Cannot open shared input");
+            }
+        }
+        if (flock(fd_, LOCK_SH | LOCK_NB)) {
+            if (errno == EWOULDBLOCK) return false;
+            throw std::runtime_error("Cannot lock shared input");
+        }
+        struct Unlock {
+            int fd;
+            ~Unlock() { if (fd >= 0) flock(fd, LOCK_UN); }
+        } unlock{fd_};
+        struct stat status{};
+        if (fstat(fd_, &status) || status.st_nlink == 0 || status.st_size != static_cast<off_t>(size_)) {
+            throw std::runtime_error("Shared input replaced or wrong size; restart controller");
+        }
+        std::array<unsigned char, 32> header{};
+        if (pread(fd_, header.data(), header.size(), 0) != 32) {
+            throw std::runtime_error("Incomplete shared input header");
+        }
+        if (header[0] == 0 || (have_header_ && header == last_header_)) return false;
+        std::vector<unsigned char> packet(size_);
+        if (pread(fd_, packet.data(), packet.size(), 0) != static_cast<ssize_t>(packet.size())) {
+            throw std::runtime_error("Incomplete shared input frame");
+        }
+        // 复制完即可释放文件锁，解码和消费不占用生产者的写入时间。
+        flock(fd_, LOCK_UN);
+        unlock.fd = -1;
+        consume(packet.data(), packet.size());
+        last_header_ = header;
+        have_header_ = true;
+        return true;
     }
 };
 
@@ -161,8 +98,7 @@ inline Observation HardwareObservation(const Policy& policy,
     const unitree_hg::msg::dds_::IMUState_& torso, const DepthFrame& depth) {
     Observation obs;
     obs.raw_depth=depth.raw_depth;
-    obs.depth_normalized=depth.normalized;
-    obs.depth=depth.image; obs.sequence=depth.sequence; obs.time=depth.captured_at;
+    obs.sequence=depth.sequence; obs.time=depth.captured_at;
     for(int i=0;i<29;++i) {
         obs.q[i]=policy.sign[i]*state.motor_state()[policy.ids[i]].q();
         obs.dq[i]=policy.sign[i]*state.motor_state()[policy.ids[i]].dq();

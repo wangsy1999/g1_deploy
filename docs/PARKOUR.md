@@ -7,14 +7,16 @@ MuJoCo 仿真器、XML、网格仍放在外部仓库，不内置本仓库；所�
 
 ## 相机链路对齐 Instinct（2026-10-22）
 
+实机相机由 C++ 控制器内的 librealsense 采集线程直接打开，深度通过进程内缓存交给推理线程。仿真同步观测使用 `/dev/shm/g1-observation-用户UID`，无需端口或 channel 参数。独立 Python 网页只作预览，启动实机控制前须退出。
+
 参考版本：`project-instinct/instinct_onboard@b6965a4202d8dceaf163dd95edb7742ed5d65e38`。
 
-- 默认仅开启 Z16 深度，480×270、60 Hz；RGB 默认关闭，可用 `--color` 打开可选预览。
+- C++ 实机仅开启 Z16 深度，480×270、60 Hz；RGB 不参与策略输入。独立 Python 预览可用 `--color`，与控制器互斥。
 - 实机策略预处理参考该版本 `ParkourAgent.refresh_depth_frame`，当前按需关闭高斯模糊：最近邻缩放至64×36，裁剪 `[18,0,16,16]`，对小于0.2米区域用半径3的 OpenCV INPAINT_NS 补洞，跳过高斯模糊（`gaussian_kernel: 0`），裁剪0–2.5米并归一化至0–1。参数写在 `apps/parkour/config/realsense_parkour.json`。
-- 原始480×270米制深度写入本机共享内存，以32字节 `G1DEP003` UDP通知新帧；控制端在50Hz策略观测中执行缩放、裁剪、补洞和归一化，再送入深度历史，高斯模糊默认关闭。策略从策略配置同目录的 `realsense_parkour.json` 加载参数；相机预览应使用相同配置。仿真旧协议与原预处理保留。
+- C++ 采集线程按设备 depth scale 将原始 Z16 深度转为独立的米制图，写入进程内最新帧缓存；控制端在50Hz策略观测中执行缩放、裁剪、补洞和归一化，再送入深度历史，高斯模糊默认关闭。策略从策略配置同目录的 `realsense_parkour.json` 加载参数。仿真观测布局与原预处理保留。
 - 深度历史按50Hz策略更新，采样步长按训练时间间隔换算：`round((5/50)/0.02)=5`，不使用相机采集频率换算。保留60项缓冲，取距最新项35/30/25/20/15/10/5/0项（8帧），帧间隔0.1秒、首尾跨度0.7秒，对齐InstinctLab Parkour训练配置。本体观测与模型权重未修改。
 - 相机网页左侧显示完整原始深度，右侧在独立预览线程按相同配置生成32×18深度并放大；视场经过裁剪，不是逐像素对应的全画幅降噪对比。RealSense空间/时间滤波不叠加到此策略路径。
-- 独立相机进程通过共享内存保留最新原始图，UDP仅通知；文件锁保证一致读取，忙时跳过，核对通知与图像头。时间戳映射与硬件数据时效保护保留。相机和控制器须同机同用户，先启动相机；旧相机服务需重启。
+- 采集线程不阻塞500Hz控制循环；相机时间戳映射到主机单调时钟，映射偏移只能减小，避免把延迟旧帧当成新帧。设备序号或时钟倒退、断流和采集异常会交给控制线程按现有停止流程处理。控制器退出时停止 pipeline 并释放 USB 设备。
 - 模型训练参数仍来自现有源码重建配置，尚无原始训练运行 YAML；此前启用高斯模糊时的处理算法通过固定版本上游函数逐像素比对；当前关闭模糊，与上游有意存在差异，不等同于已证明训练配置完全相同或完成实机运动验收。
 
 Parkour 动作处理可通过 `g1_parkour.json` 的 `raw_clip` 和 `clip_action_feedback` 配置。当前分别为 `100` 和 `true`：网络输出先限幅到 `[-100,100]`，该动作值作为下一次观测的 `last_action`；随后乘 `action_scale`、加默认姿态、应用关节方向和电机映射，最后按 `joint_clip_lower/upper` 限制目标角度。设为 `false` 时反馈原始网络输出，但计算目标仍使用限幅后的动作。旧配置省略两项时不限制原始动作并反馈原始输出。此处是部署行为配置，不表示已验证与原始训练动作处理一致。
@@ -39,7 +41,7 @@ bash apps/parkour/parkour.sh check
 
 ## RealSense 网页独立测试
 
-相机外接线接到 PC2 所属 USB 3.x 接口。在 PC2 提供与 JetPack/Python 匹配的 librealsense/pyrealsense2；
+相机外接线接到 PC2 所属 USB 3.x 接口。在 PC2 提供与 JetPack/系统 ABI 匹配的 librealsense2 C++ 开发库；独立预览另需 pyrealsense2；
 网页还需 NumPy 和无 GUI 的 OpenCV，依赖范围见 `apps/realsense/requirements.txt`。Jetson 驱动安装方式需匹配实际 L4T，不自动修改内核或安装驱动。
 已有 OpenCV 时不必再装另一份 headless 轮子。可使用 `.python-deps/` 或通过 `PYTHON_BIN` 指定环境。
 
@@ -60,7 +62,7 @@ bash apps/realsense/realsense.sh --host 0.0.0.0 --port 8766
 bash apps/realsense/realsense.sh --mock --host 127.0.0.1 --port 8766
 ```
 
-该模式明确显示 `SYNTHETIC TEST`，禁止同时指定 `--depth-port`，不能用于实机策略。
+该模式明确显示 `SYNTHETIC TEST`，不会向策略共享合成图像，不能用于实机策略。
 安装包入口为 `./realsense ...` 或 `./g1 realsense ...`。
 
 ## 仿真：DWaQ 与 Parkour 共用 MuJoCo 环境
@@ -68,43 +70,37 @@ bash apps/realsense/realsense.sh --mock --host 127.0.0.1 --port 8766
 终端一（Python 环境需要源仓库的 MuJoCo、NumPy、pygame、unitree_sdk2py）：
 
 ```bash
-python apps/simulation/sim.py --mujoco-root /path/to/unitree_mujoco --domain 1 --port 17200
+python apps/simulation/sim.py --mujoco-root /path/to/unitree_mujoco --domain 1
 ```
 
 同一仿真也支持 `./build/g1_dwaq --sim --domain 1 --interface lo`；一次只运行一个控制器。旧入口 `apps/parkour/parkour_sim.py` 保持兼容。仅运行 DWaQ 时可加 `--no-depth`。
 
 启动器只覆盖当前 Python 进程配置，不修改外部仓库。源仓库用训练相机内外参进行 MuJoCo 射线深度采样，
-每个仿真时刻把关节、torso 角速度、重力、torso 高度和 36×64 深度打包到 `127.0.0.1:17200`。
+每个仿真时刻把关节、torso 角速度、重力、torso 高度和 36×64 深度写入本机共享内存 `/dev/shm/g1-observation-用户UID`。
 启动器强制使用本项目 `apps/parkour/config/g1_parkour.json`，保证关节方向签名一致。
 
 终端二：
 
 ```bash
-bash apps/parkour/parkour.sh sim --domain 1 --port 17200
+bash apps/parkour/parkour.sh sim --domain 1
 ```
 
 先 `p → 等待 Holding training pose → r` 空跑查看目标；
 按 `9` 使能输出会清空空跑目标，再 `p → 等待复位 → r`。
 `w/s` 前向速度±0.1 m/s，`q/e` 转向±0.1 rad/s，`x` 清零，空格/Ctrl+C 停止。
 仿真 F710 可添加 `--joystick /dev/input/js0`：Start 使能、X 复位、A 进入策略，进入前摇杆回中；进入后直接用摇杆控制前向和转向，无需按住 RB，Y 清零、B 停止。
-仿真域必须为正数；本程序始终将 UDP 绑定到回环地址。
+仿真域必须为正数。深度与同步观测通过本机共享内存自动连接；无需端口或 channel 参数。DDS 仍使用 lo。
 
 
-## 实机单命令启动（自动相机）
+## 实机单命令启动（C++ 相机）
 
-在安装目录执行 `./g1 parkour real eth0`，入口会先启动 RealSense 网页服务和本机 UDP 17201 深度转发，等新帧就绪后再启动 Parkour。启动后仍为空跑，按 Start 接管后才启用真实输出。
+安装原生 librealsense2 开发库后，以 `-DG1_REQUIRE_REALSENSE=ON` 编译机器人版本；SDK 在私有目录时设置 `CMAKE_PREFIX_PATH` 或 `realsense2_DIR`。仅安装 Python wheel 不能满足 C++ 链接要求。工作站无 SDK 时仍支持仿真与离线模型检查，实机启动会明确报缺失依赖。
 
-相机网页为 `http://机器人当前IP:8766/`。自动启动的相机日志保存在 `install/logs/parkour-camera.log`；运控退出或 Ctrl+C 时停止本次启动的相机。已有匹配 UDP 端口的真实相机服务会被复用，退出时保留；已有服务未转发深度时会明确报错，不会抢占设备。
-
-`--port 17202` 会同时修改运控与相机的深度 UDP 端口；`--camera-web-port 8767` 修改自动相机网页端口。需要手动管理相机时使用 `./g1 parkour real eth0 --no-auto-camera`，下文的相机独立启动方式仍可使用。仿真与离线检查入口不会自动启动相机。
+执行 `./g1 parkour real eth0` 或 `./g1 hybrid real eth0`，C++ 控制器会自动打开 RealSense，不启动 Python 相机服务，无需相机传输参数。启动后仍为空跑，按 Start 接管后才启用真实输出。先退出任何独立相机预览，避免占用同一 USB 设备。
 
 ## 实机：RealSense + LowState + torso IMU
 
-先运行独立相机服务，同时启用原始米制深度的本机转发：
-
-```bash
-bash apps/realsense/realsense.sh --host 0.0.0.0 --port 8766 --depth-port 17201
-```
+可先执行 `./build/g1_camera_check`（安装后为 `./bin/g1_camera_check`）采集并验证60张新鲜深度图；该程序只访问相机，不初始化 DDS 或发布机器人命令，完成后释放相机。
 
 再运行实机空跑（替换网卡）：
 
@@ -127,7 +123,7 @@ Start 之前只有 `rt/g1/dry_run_target`，不会创建 `rt/lowcmd` 发布者�
 | --- | --- |
 | 关节位置/速度 | `rt/lowstate`，按策略顺序和 `joint_sign` 转换 |
 | torso 角速度、重力 | `rt/secondary_imu` 的 `IMUState_`，四元数 wxyz；不能用 pelvis IMU 代替 |
-| 深度 | RealSense Z16 × 设备 depth scale → 米制图像平面 Z → 本机 `G1DEP001` UDP |
+| 深度 | RealSense Z16 × 设备 depth scale → 米制图像平面 Z → C++ 进程内缓存 |
 | 速度命令 | Unitree 遥控器；vx∈[0,1]，vy固定0，wz∈[-1,1] |
 
 相机和 C++ 推理必须在同一台 PC2，深度时间戳使用同机单调时钟。相机服务重启需同时重启控制器。

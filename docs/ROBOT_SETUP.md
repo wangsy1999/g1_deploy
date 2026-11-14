@@ -1,6 +1,6 @@
 # 一键配置机器人（手动复制文件）
 
-适用当前 G1 开发电脑：Linux ARM64/aarch64，已在 Ubuntu 20.04 验证。不会自动 SSH/SCP/rsync，不启动运动控制，不改系统时间或系统 glibc。
+适用当前 G1 开发电脑：Linux ARM64/aarch64，原依赖流程曾在 Ubuntu 20.04 验证；新增的原生相机需单独验证。不会自动 SSH/SCP/rsync，不启动运动控制，不改系统时间或系统 glibc。
 
 ## 使用
 
@@ -18,7 +18,7 @@ bash scripts/setup_robot.sh
 bash scripts/setup_robot.sh --install-system-deps
 ```
 
-额外验证真实相机出图、网页和 UDP（只读，不启动控制程序）：
+额外验证 C++ 原生相机出图（只读，不启动控制程序）：
 
 ```bash
 bash scripts/setup_robot.sh --verify-camera
@@ -41,11 +41,17 @@ cd install
 ./g1 parkour real eth0
 ```
 
-关节网页：http://192.168.0.200:8765/ 。Parkour 启动后的相机网页：http://192.168.0.200:8766/ 。
+关节网页：http://192.168.0.200:8765/ 。Parkour 使用进程内 C++ 相机采集，不自动启动相机网页。独立网页预览须在控制器退出后运行。
 
 原配遥控器：X 复位、A 进入策略、Start 真实接管、Select 停止退出。
 空跑用 X → 等待复位完成 → A。真实控制需要现场保护，Start → X → 等待复位完成 → 摇杆回中 → A。
 配置已将左右 hip yaw 限制为 ±90°，其它关节保持原配置。
+
+## 原生相机依赖
+
+机器人构建强制要求 `librealsense2` C++ 开发库，配置脚本设置 `G1_REQUIRE_REALSENSE=ON`。SDK 可安装到系统，或放在 `.deps/realsense` 并包含 CMake 配置、头文件及本机 ABI 兼容的库。旧离线缓存中的 `pyrealsense2` wheel 和私有 glibc 仅服务于独立 Python 预览，不满足 C++ 依赖；离线迁移须额外准备原生 SDK。`--install-system-deps` 会尝试安装 `librealsense2-dev`，目标软件源须提供该包。
+
+实机启动 `./g1 parkour real eth0` 或 `./g1 hybrid real eth0` 即可，先关闭任何占用相机的独立预览。只读相机诊断使用 `./bin/g1_camera_check`，不需要网页端口或 Python 相机服务。
 
 ## 配置内容
 
@@ -54,7 +60,7 @@ cd install
 - `.deps/unitree-sdk2`、`.deps/cyclonedds`、`.deps/onnxruntime`：已在此机器人验证的 ARM64 原生库；构建不再依赖其它项目目录。
 - `.deps/glibc-2.35`：Ubuntu 官方 ARM64 glibc 2.35。只有相机专用 Python 入口通过它的动态加载器启动；不修改 `/lib`、`/usr/lib`、系统加载器或全局环境变量。
 - `apps/realsense/python3-realsense.sh`：相机专用入口模板；由配置脚本复制到 `.deps/python/bin/python3-realsense`。网页监视器与控制程序继续使用原系统库。
-- 编译 Release、运行项目测试、安装到 `install/`，并完成两套模型的离线推理检查。已有安装会备份到 `deployment-backups/`，发现本项目控制程序正在运行则停止配置，需先由操作者退出程序。
+- 编译 Release、安装到 `install/`，并完成两套模型的离线推理检查。已有安装会备份到 `deployment-backups/`，发现本项目控制程序正在运行则停止配置，需先由操作者退出程序。
 - 日志及包清单位于 `.deps/setup-logs/`。
 
 ## 离线缓存与迁移

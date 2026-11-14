@@ -404,7 +404,7 @@ private:
 
 };
 
-// Local UDP protocol: little endian, 32-byte header and 2369 float32 values.
+// 共享内存观测格式：小端、32 字节帧头及 2369 个 float32。
 inline Observation Decode(const unsigned char* bytes,std::size_t size,uint32_t signature) {
     constexpr std::size_t count=29+29+3+3+1+36*64;
     if(size!=32+count*4 || std::memcmp(bytes,"G1PKR001",8)!=0) throw std::runtime_error("Invalid observation packet");
