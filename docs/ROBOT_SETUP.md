@@ -36,6 +36,7 @@ bash scripts/setup_robot.sh --deps-only
 cd install
 ./g1 check
 ./g1 parkour check
+./g1 hybrid check
 ./g1 monitor eth0 0.0.0.0 8765
 # 另开终端；启动默认空跑：
 ./g1 parkour real eth0
@@ -55,12 +56,13 @@ cd install
 
 ## 配置内容
 
+- 控制器使用目标机预装的 NVIDIA CUDA Toolkit 和 TensorRT 8.5–10.x C++ 开发库，含 ONNX Parser。自定义安装路径可在运行脚本前设置 `TENSORRT_ROOT` 和 `CUDAToolkit_ROOT` 环境变量。
 - 项目 `.deps/runtime`：Python 3.10.15；`.deps/python`：独立虚拟环境。
 - NumPy 1.26.4、CycloneDDS Python 0.10.2、宇树 Python SDK、OpenCV headless 4.11.0.86、RealSense Python 2.55.1.6486。
-- `.deps/unitree-sdk2`、`.deps/cyclonedds`、`.deps/onnxruntime`：已在此机器人验证的 ARM64 原生库；构建不再依赖其它项目目录。
+- `.deps/unitree-sdk2`、`.deps/cyclonedds` 提供项目使用的 ARM64 原生库。
 - `.deps/glibc-2.35`：Ubuntu 官方 ARM64 glibc 2.35。只有相机专用 Python 入口通过它的动态加载器启动；不修改 `/lib`、`/usr/lib`、系统加载器或全局环境变量。
 - `apps/realsense/python3-realsense.sh`：相机专用入口模板；由配置脚本复制到 `.deps/python/bin/python3-realsense`。网页监视器与控制程序继续使用原系统库。
-- 编译 Release、安装到 `install/`，并完成两套模型的离线推理检查。已有安装会备份到 `deployment-backups/`，发现本项目控制程序正在运行则停止配置，需先由操作者退出程序。
+- 编译 Release、安装到 `install/`，并运行 DWaQ、Parkour 和 Hybrid 的离线推理检查。已有安装会备份到 `deployment-backups/`，发现本项目控制程序正在运行则停止配置，需先由操作者退出程序。
 - 日志及包清单位于 `.deps/setup-logs/`。
 
 ## 离线缓存与迁移

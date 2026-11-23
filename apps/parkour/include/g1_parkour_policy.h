@@ -3,8 +3,7 @@
 #include "g1_config_utils.h"
 #include "g1_joint_mapping.h"
 #include "g1_observation_history.h"
-#include "g1_onnx_utils.h"
-#include <onnxruntime_cxx_api.h>
+#include "g1_tensorrt.h"
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/photo.hpp>
@@ -195,8 +194,7 @@ private:
 
     // 把八张深度图交给编码器，提取 128 个地形特征。
     TerrainFeatures EncodeDepth(std::vector<float>& depth_history) {
-        return g1_onnx::Run<kDepthFeatureSize>(*encoder_, depth_history, {1, kHistoryFrames, kDepthHeight, kDepthWidth},
-                          encoder_in_, encoder_out_);
+        return encoder_->Run<kDepthFeatureSize>(depth_history);
     }
 
     // 动作网络同时需要“机器人最近的状态”和“深度网络提取的地形特征”。
@@ -208,8 +206,8 @@ private:
         return state_history;
     }
 
-    Joints PredictActions(std::vector<float>& actor_input) {
-        return g1_onnx::Run<kJointCount>(*actor_, actor_input, {1, kActorInputSize}, actor_in_, actor_out_);
+    Joints PredictActions(const std::vector<float>& actor_input) {
+        return actor_->Run<kJointCount>(actor_input);
     }
 
 public:
@@ -374,18 +372,13 @@ private:
         auto model_path = [&](const char* key) {
             return g1_config::ResolvePath(config, settings["models"][key].as<std::string>());
         };
-        auto options = g1_onnx::CpuSessionOptions();
-        encoder_ = std::make_unique<Ort::Session>(env_, model_path("depth_encoder").c_str(), options);
-        actor_ = std::make_unique<Ort::Session>(env_, model_path("actor").c_str(), options);
-        g1_onnx::ValidateSingleInputNetwork(*encoder_, {1, kHistoryFrames, kDepthHeight, kDepthWidth},
-                        {1, kDepthFeatureSize}, encoder_in_, encoder_out_);
-        g1_onnx::ValidateSingleInputNetwork(*actor_, {1, kActorInputSize}, {1, kJointCount}, actor_in_, actor_out_);
+        encoder_ = std::make_unique<g1_tensorrt::Network>(model_path("depth_encoder"));
+        encoder_->ValidateShapes({1, kHistoryFrames, kDepthHeight, kDepthWidth}, {1, kDepthFeatureSize});
+        actor_ = std::make_unique<g1_tensorrt::Network>(model_path("actor"));
+        actor_->ValidateShapes({1, kActorInputSize}, {1, kJointCount});
     }
 
-    // 模型及输入输出名称；env_ 的生命周期覆盖两个 session。
-    Ort::Env env_{ORT_LOGGING_LEVEL_WARNING, "g1_parkour"};
-    std::unique_ptr<Ort::Session> encoder_, actor_;
-    std::string encoder_in_, encoder_out_, actor_in_, actor_out_;
+    std::unique_ptr<g1_tensorrt::Network> encoder_, actor_;
 
     // 动作处理配置：raw_clip_ 限制动作值，target_* 限制最终电机角度。
     float raw_clip_ = std::numeric_limits<float>::max();

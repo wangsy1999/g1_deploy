@@ -11,7 +11,7 @@ config="$package_dir/apps/dwaq/config/g1_locomotion.json"
 usage() {
     cat <<'HELP'
 Usage:
-  ./g1 dwaq|parkour|hybrid check [options]   Offline ONNX inference, no DDS
+  ./g1 dwaq|parkour|hybrid check [options]   Offline TensorRT inference, no DDS
   ./g1 dwaq|parkour|hybrid sim [options]     Simulation controller (start MuJoCo separately)
   ./g1 dwaq|parkour|hybrid real ROBOT_INTERFACE [options]
                                     Hardware control, Unitree remote by default
@@ -22,7 +22,7 @@ Model paths, reset_seconds and hardware limits are configured in each program's 
 Parkour/Hybrid real open RealSense directly in C++; no camera transport parameters.
 The same commands work in the source checkout and installed package.
 Legacy DWaQ shortcuts remain available:
-  ./g1 check                         Offline ONNX inference, no DDS
+  ./g1 check                         Offline TensorRT inference, no DDS
   ./g1 interfaces                    Show local network interfaces and route to control PC
   ./g1 monitor INTERFACE [HOST] [PORT] Start the read-only web monitor (Python dependencies needed)
   ./g1 realsense [options]           Standalone RGB/depth web preview (stop before hardware control)

@@ -31,13 +31,17 @@ using Imu=unitree_hg::msg::dds_::IMUState_;
 
 namespace g1_parkour_app {
 namespace {
-int CheckPolicy(g1_parkour::Policy& policy) {
+g1_parkour::Joints RunStandingPolicy(g1_parkour::Policy& policy) {
     g1_parkour::Observation obs;
     obs.q = policy.neutral;
     obs.gravity = {0, 0, -1};
     obs.depth.fill(2.5f);
-    const auto target = policy.Step(obs, {0, 0, 0});
-    std::cout << "CPU parkour double-ONNX inference OK; DDS targets:";
+    return policy.Step(obs, {0, 0, 0});
+}
+
+int CheckPolicy(g1_parkour::Policy& policy) {
+    const auto target = RunStandingPolicy(policy);
+    std::cout << "Parkour TensorRT inference OK; DDS targets:";
     for (float v : target) std::cout << ' ' << v;
     std::cout << '\n';
     return 0;
@@ -157,10 +161,18 @@ private:
         } else {
             simulation->Latest([&](const unsigned char* packet,std::size_t size) {
                 auto value=g1_parkour::Decode(packet,size,policy.CameraPolicy().signature);
-                if(have_obs && (value.sequence <= obs.sequence || value.time <= last_time))
-                    throw std::runtime_error("Simulation stream restarted or replayed; restart controller");
-                if(running && have_obs && value.time-last_time>.05)
-                    throw std::runtime_error("Observation frames dropped; history timing invalid");
+                if(running && have_obs) {
+                    if(value.sequence <= obs.sequence || value.time <= last_time) {
+                        // Invalidate prior targets and reset history on the inference thread.
+                        const auto defaults = policy.DefaultTargets();
+                        target = defaults.position;
+                        motor_kp = defaults.kp;
+                        motor_kd = defaults.kd;
+                        policy_worker->Begin(false);
+                    } else if(value.time-last_time>.05) {
+                        throw std::runtime_error("Observation frames dropped; history timing invalid");
+                    }
+                }
                 static_cast<g1_parkour::Observation&>(obs)=value;last_time=value.time;
                 have_obs=true;obs_at=now;
             });
@@ -384,6 +396,9 @@ int RunController(const Options& options) {
     g1_control::InstallSignalHandlers();
     g1_parkour::Policy policy(options.config);
     if (options.mode == Mode::CheckPolicy) return CheckPolicy(policy);
+    // Initialize both CUDA networks before starting the timed control loop.
+    RunStandingPolicy(policy);
+    policy.Reset();
     const auto reset_seconds = g1_config::ReadResetSeconds(YAML::LoadFile(options.config));
     ParkourPolicy adapter(policy);
     return RunControlLoop(options, adapter, reset_seconds);

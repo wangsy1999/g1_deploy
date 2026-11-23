@@ -3,7 +3,7 @@
 #include "g1_config_utils.h"
 #include "g1_joint_mapping.h"
 #include "g1_observation_history.h"
-#include "g1_onnx_utils.h"
+#include "g1_tensorrt.h"
 
 // G1 velocity interface from unitreerobotics/unitree_rl_lab (Apache-2.0).
 // No Isaac runtime is used. Arrays from DDS are reordered before inference.
@@ -16,7 +16,6 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-#include <onnxruntime_cxx_api.h>
 #include <yaml-cpp/yaml.h>
 
 namespace g1_policy {
@@ -39,8 +38,7 @@ struct State {
 
 class Policy {
 public:
-    explicit Policy(const std::string& config)
-        : env_(ORT_LOGGING_LEVEL_WARNING, "g1_locomotion") {
+    explicit Policy(const std::string& config) {
         const auto cfg = YAML::LoadFile(config);
         const auto model_path = g1_config::ResolvePath(config, cfg["policy_path"].as<std::string>());
         // 先读懂模型约定：关节顺序、动作转换、观测布局和速度范围。
@@ -96,7 +94,7 @@ public:
     }
 
     const char* Interface() const {
-        return input_names_.size() == 2 ? "float32 [1,96] + [1,480] -> [1,29]"
+        return input_sizes_.size() == 2 ? "float32 [1,96] + [1,480] -> [1,29]"
                                        : "float32 [1,480] -> [1,29]";
     }
 
@@ -197,15 +195,14 @@ private:
         return observation;
     }
 
-    Joints PredictActions(Observation& observation) {
+    Joints PredictActions(const Observation& observation) {
         // 按模型声明的输入顺序绑定缓冲区；双输入模型还需要独立的当前帧。
-        std::vector<g1_onnx::InputTensor> inputs;
-        for (std::size_t i = 0; i < input_names_.size(); ++i) {
-            float* data = input_sizes_[i] == kFrame ? current_frame_.data() : observation.data();
-            inputs.push_back({input_names_[i].c_str(), data, static_cast<std::size_t>(input_sizes_[i]),
-                              {1, input_sizes_[i]}});
+        std::array<g1_tensorrt::Input, 2> inputs{};
+        for (std::size_t i = 0; i < input_sizes_.size(); ++i) {
+            const float* data = input_sizes_[i] == kFrame ? current_frame_.data() : observation.data();
+            inputs[i] = {data, input_sizes_[i]};
         }
-        return g1_onnx::Run<kJoints>(*session_, inputs, output_name_);
+        return network_->Run<kJoints>(inputs.data(), input_sizes_.size());
     }
 
     // 启动时读取配置并检查模型接口；不参与每一步推理。
@@ -285,15 +282,12 @@ private:
     }
 
     void LoadNetwork(const std::string& model_path) {
-        auto options = g1_onnx::CpuSessionOptions();
-        options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-        session_ = std::make_unique<Ort::Session>(env_, model_path.c_str(), options);
-        const auto count = session_->GetInputCount();
-        if ((count != 1 && count != 2) || session_->GetOutputCount() != 1)
+        network_ = std::make_unique<g1_tensorrt::Network>(model_path);
+        const auto& shapes = network_->InputShapes();
+        if (shapes.size() != 1 && shapes.size() != 2)
             throw std::runtime_error("Expected history input, or current observation and history inputs, and one output");
         bool has_frame = false, has_history = false;
-        for (std::size_t i = 0; i < count; ++i) {
-            const auto shape = g1_onnx::TensorShape(*session_, true, i);
+        for (const auto& shape : shapes) {
             if (shape.size() != 2 || shape[0] != 1 ||
                 (shape[1] != kFrame && shape[1] != kObservation))
                 throw std::runtime_error("Expected float32 inputs [1,96] and/or [1,480]");
@@ -302,22 +296,16 @@ private:
                 throw std::runtime_error("Duplicate policy input shape");
             has_frame = has_frame || frame;
             has_history = has_history || !frame;
-            input_sizes_.push_back(shape[1]);
-            input_names_.emplace_back(g1_onnx::TensorName(*session_, true, i));
+            input_sizes_.push_back(static_cast<std::size_t>(shape[1]));
         }
-        if (!has_history || (count == 2 && !has_frame))
+        if (!has_history)
             throw std::runtime_error("Policy requires a history input");
-        if (g1_onnx::TensorShape(*session_, false, 0) != std::vector<int64_t>({1, kJoints}))
+        if (network_->OutputShape() != g1_tensorrt::Shape{1, kJoints})
             throw std::runtime_error("Expected float32 output [1,29]");
-        output_name_ = g1_onnx::TensorName(*session_, false, 0);
     }
 
-    // 模型及输入输出接口。env_ 必须比 session_ 更早构造、更晚销毁。
-    Ort::Env env_;
-    std::unique_ptr<Ort::Session> session_;
-    std::vector<std::string> input_names_;
-    std::vector<int64_t> input_sizes_;
-    std::string output_name_;
+    std::unique_ptr<g1_tensorrt::Network> network_;
+    std::vector<std::size_t> input_sizes_;
 
     // 关节参数按策略顺序保存；motor_ids_[joint] 给出对应的 DDS 电机编号。
     std::array<int, kJoints> motor_ids_{};

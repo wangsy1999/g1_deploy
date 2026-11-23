@@ -20,7 +20,7 @@ C++控制程序不依赖MuJoCo、ROS或Python；可选网页监控需要Python�
 | 程序 / 源码入口 | 功能 | 常用启动方式 |
 | --- | --- | --- |
 | `g1_dwaq` / `apps/dwaq/src/main.cpp` | DreamWaQ 行走策略、姿态复位、硬件只读检查和手柄诊断 | `./g1 dwaq check`、`./g1 dwaq sim`、`./g1 dwaq real eth0` |
-| `g1_parkour` / `apps/parkour/src/main.cpp` | 深度编码器与动作网络双 ONNX 推理，支持 MuJoCo 或实机深度输入 | `./g1 parkour check`、`./g1 parkour sim`、`./g1 parkour real eth0` |
+| `g1_parkour` / `apps/parkour/src/main.cpp` | 深度编码器与动作网络均使用 TensorRT，支持 MuJoCo 或实机深度输入 | `./g1 parkour check`、`./g1 parkour sim`、`./g1 parkour real eth0` |
 | `g1_hybrid` / `apps/hybrid/src/main.cpp` | 站立、后退、原地转向使用 DWaQ，持续前进时切换到 Parkour | `./g1 hybrid check`、`./g1 hybrid sim`、`./g1 hybrid real eth0` |
 | `apps/monitor/joint_monitor.py` | 只读关节、IMU、实际/目标曲线及空跑目标网页 | `bash apps/monitor/monitor.sh eth0 0.0.0.0 8765` |
 | `apps/realsense/realsense_web.py` | RealSense 原始/策略深度预览、可选 RGB、独立相机预览 | `bash apps/realsense/realsense.sh --host 0.0.0.0 --port 8766` |
@@ -269,13 +269,15 @@ cmake/           构建信息模板
 
 两套程序统一等待有效启动数据最多 10 秒，且优先处理停止，其次处理遥控器事件，最后处理键盘事件。输出已经使能时忽略重复接管，不会重新释放运动服务或清空正在运行的策略。
 
-推理工具集中在 `common/include/`：`g1_config_utils.h` 读取配置数组与解析相对路径，`g1_onnx_utils.h` 校验和执行 ONNX 网络，`g1_observation_history.h` 更新历史缓存并按观测项排列输入。两套策略仅保留各自的观测、网络组合和动作转换；策略线程统一使用 `g1_inference::PolicyWorker`。
+两套策略通过 `common/src/g1_tensorrt.cpp` 加载网络、校验张量并执行推理。`g1_config_utils.h` 读取配置和解析相对路径，`g1_observation_history.h` 更新观测历史。策略线程统一使用 `g1_inference::PolicyWorker`。
 
 控制器还共用 `g1_loop_scheduler.h`（周期调度与跳过错过周期）、`g1_dds_state_cache.h`（DDS 订阅、带时间戳快照及故障锁存）、`g1_monitor_publisher.h`（使能状态、实际目标和空跑预览）、`g1_joint_mapping.h`（关节名称映射、编号校验与顺序转换）。状态验证规则和超时参数仍由各自程序提供。
 
 程序专属文件放在对应的 `apps/<程序>/` 内；跨程序共用文件放在 `common/`，避免复制多份。
 DWaQ 的策略与硬件保护参数位于 `apps/dwaq/config/g1_locomotion.json`；Parkour 的策略与硬件保护参数位于 `apps/parkour/config/g1_parkour.json`。两套程序分别维护自己的配置。
 DWaQ 的 `policy_path`、Parkour 的 `models.depth_encoder` 与 `models.actor` 在各自 JSON 中指定模型文件。相对路径以 JSON 所在目录为基准，默认指向 `../models/`；绝对路径也可使用。需要更换模型时修改 JSON，或通过 `--config` 选择另一份配置。DWaQ 离线检查格式为 `--check-policy [--config 配置.json]`。两份策略 JSON 的顶层 `reset_seconds` 指定复位插值时长，必须为有限正数；旧配置未提供时默认使用 3 秒。
+
+默认配置继续使用仓库中的 `.onnx` 模型。程序在启动时用 TensorRT 构建引擎并关闭 TF32，构建可能需要等待。若要缩短后续启动时间，可在目标 GPU 和 TensorRT 环境中用 `trtexec --onnx=模型.onnx --saveEngine=模型.engine --noTF32` 预编译，然后将对应配置路径指向 `.engine` 或 `.plan`。更换目标 GPU 或 TensorRT 版本后重新生成引擎。
 安装包内的资源也按 `apps/` 归类，根目录继续提供 `g1`、`parkour`、`realsense` 和 `monitor` 启动入口。
 旧安装目录可能保留旧版文件；建议安装到新目录后再切换使用。
 
@@ -302,7 +304,7 @@ bash apps/monitor/monitor.sh enP8p1s0 192.168.123.164 8765
 bash scripts/setup_robot.sh
 ```
 
-该入口离线配置项目独立的 Python、SDK、ONNX Runtime 与相机专用 glibc 2.35，然后编译和安装。
+该入口离线配置项目独立的 Python、SDK 与相机专用 glibc 2.35，然后使用目标机预装的 CUDA 和 TensorRT 编译和安装。
 不执行文件同步，不替换系统 glibc，不启动控制程序。支持 `--verify-camera` 只读相机验证。
 详细用法、缺失系统包的处理和离线缓存说明见 [机器人一键配置](docs/ROBOT_SETUP.md)。
 
@@ -312,30 +314,30 @@ bash scripts/setup_robot.sh
 Unitree官方网络说明中PC1为`192.168.123.161`、PC2为`192.168.123.164`；实际地址和网卡以交付设备为准，
 参考 [官方网络说明](https://github.com/unitreerobotics/xr_teleoperate/wiki/CycloneDDS-and-UnitreeSDK-%28en%29)。
 
-依赖：Linux、CMake>=3.16、C++17、Unitree SDK2、Boost开发头文件、yaml-cpp、CPU版ONNX Runtime C/C++发行包。
+依赖包括 Linux、CMake 3.16 或更新版本、C++17、Unitree SDK2、Boost、yaml-cpp、OpenCV C++、可用的 NVIDIA GPU、CUDA Toolkit 和 TensorRT 8.5–10.x C++ 开发库（含 ONNX Parser）。
 SDK2及其CycloneDDS运行库按 [官方SDK安装说明](https://github.com/unitreerobotics/unitree_sdk2) 安装到机载系统。
-SDK和ORT必须与机载 `uname -m` 对应：`aarch64` 使用ARM64版，`x86_64` 使用x64版。
+SDK、CUDA 和 TensorRT 必须匹配目标系统架构；Jetson 使用与系统 JetPack 匹配的 CUDA 和 TensorRT。参考 [JetPack 5.1](https://developer.nvidia.com/embedded/jetpack-sdk-51) 和 [JetPack 6.2](https://developer.nvidia.com/embedded/jetpack-sdk-62)。
 
-将本仓库复制到机载开发计算机，在仓库根目录执行，替换ORT安装路径：
+将仓库复制到机载开发计算机后，在仓库根目录执行。使用自定义安装路径时，传入 `-DTENSORRT_ROOT=/path/to/TensorRT` 或 `-DCUDAToolkit_ROOT=/path/to/cuda`。
 
 ```bash
 uname -m
-export ONNXRUNTIME_ROOT=/path/to/native/onnxruntime
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
-  -DONNXRUNTIME_ROOT="$ONNXRUNTIME_ROOT" \
   -DCMAKE_INSTALL_PREFIX="$PWD/install"
 cmake --build build -j4
 cmake --install build
 ```
 
-安装目录包含`g1`和`monitor`启动脚本、`bin/g1_dwaq`、`apps/`和`lib/`。
-ORT随包安装，SDK2/CycloneDDS、yaml-cpp及系统运行库仍由机载环境提供。
+安装目录包含 `g1` 和 `monitor` 启动脚本、`bin/` 和 `apps/`。
+机载环境提供 CUDA/TensorRT、SDK2/CycloneDDS、yaml-cpp 及其他系统运行库。
 安装时固定SDK对应的运行库目录，避免已加载ROS环境时混用DDS库。
 
 ```bash
 ldd install/bin/g1_dwaq  # 不应有not found
 cd install
 ./g1 check             # 离线网络检查，不初始化DDS
+./g1 parkour check
+./g1 hybrid check
 ```
 
 整个安装目录可在同一台机器上移动，模型与配置按启动脚本所在位置加载。

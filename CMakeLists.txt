@@ -8,10 +8,34 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 set(REPOSITORY_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 set(COMMON_INCLUDE "${REPOSITORY_ROOT}/common/include")
-set(ONNXRUNTIME_ROOT "$ENV{ONNXRUNTIME_ROOT}" CACHE PATH "Native CPU ONNX Runtime C/C++ distribution")
-if(NOT ONNXRUNTIME_ROOT)
-    message(FATAL_ERROR "Set ONNXRUNTIME_ROOT to the ONNX Runtime distribution matching this onboard CPU")
+set(TENSORRT_ROOT "$ENV{TENSORRT_ROOT}" CACHE PATH "TensorRT SDK install prefix")
+set(CUDAToolkit_ROOT "$ENV{CUDAToolkit_ROOT}" CACHE PATH "CUDA Toolkit install prefix")
+find_path(TENSORRT_INCLUDE_DIR NvInfer.h HINTS "${TENSORRT_ROOT}"
+    PATH_SUFFIXES include "include/${CMAKE_LIBRARY_ARCHITECTURE}")
+find_path(TENSORRT_ONNX_INCLUDE_DIR NvOnnxParser.h HINTS "${TENSORRT_ROOT}"
+    PATH_SUFFIXES include "include/${CMAKE_LIBRARY_ARCHITECTURE}")
+find_library(TENSORRT_LIBRARY nvinfer HINTS "${TENSORRT_ROOT}"
+    PATH_SUFFIXES lib lib64 "lib/${CMAKE_LIBRARY_ARCHITECTURE}")
+find_library(TENSORRT_ONNX_LIBRARY nvonnxparser HINTS "${TENSORRT_ROOT}"
+    PATH_SUFFIXES lib lib64 "lib/${CMAKE_LIBRARY_ARCHITECTURE}")
+if(NOT TENSORRT_INCLUDE_DIR OR NOT TENSORRT_ONNX_INCLUDE_DIR OR
+   NOT TENSORRT_LIBRARY OR NOT TENSORRT_ONNX_LIBRARY)
+    message(FATAL_ERROR "Install TensorRT 8.5–10.x C++ and ONNX parser development files or set TENSORRT_ROOT")
 endif()
+
+# FindCUDAToolkit was added in CMake 3.17. Keep system CMake 3.16 usable on Ubuntu 20.04.
+find_path(G1_CUDA_INCLUDE_DIR cuda_runtime_api.h HINTS "${CUDAToolkit_ROOT}" /usr/local/cuda
+    PATH_SUFFIXES include "targets/${CMAKE_SYSTEM_PROCESSOR}-linux/include" targets/sbsa-linux/include)
+find_library(G1_CUDART_LIBRARY cudart HINTS "${CUDAToolkit_ROOT}" /usr/local/cuda
+    PATH_SUFFIXES lib64 lib "targets/${CMAKE_SYSTEM_PROCESSOR}-linux/lib" targets/sbsa-linux/lib)
+if(NOT G1_CUDA_INCLUDE_DIR OR NOT G1_CUDART_LIBRARY)
+    message(FATAL_ERROR "Install CUDA Toolkit development files or set CUDAToolkit_ROOT")
+endif()
+add_library(g1_tensorrt STATIC common/src/g1_tensorrt.cpp)
+target_include_directories(g1_tensorrt PUBLIC "${COMMON_INCLUDE}")
+target_include_directories(g1_tensorrt SYSTEM PRIVATE
+    "${TENSORRT_INCLUDE_DIR}" "${TENSORRT_ONNX_INCLUDE_DIR}" "${G1_CUDA_INCLUDE_DIR}")
+target_link_libraries(g1_tensorrt PRIVATE "${TENSORRT_LIBRARY}" "${TENSORRT_ONNX_LIBRARY}" "${G1_CUDART_LIBRARY}")
 find_package(Threads REQUIRED)
 list(APPEND CMAKE_PREFIX_PATH "/usr/local" "/opt/unitree_robotics")
 find_package(unitree_sdk2 REQUIRED)
@@ -26,11 +50,6 @@ get_filename_component(SDK_RUNTIME_DIR "${SDK_LIBRARY}" DIRECTORY)
 find_package(Boost REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core imgproc photo)
-find_path(ORT_INCLUDE onnxruntime_cxx_api.h PATHS "${ONNXRUNTIME_ROOT}/include" NO_DEFAULT_PATH)
-find_library(ORT_LIBRARY NAMES onnxruntime libonnxruntime.so.1 PATHS "${ONNXRUNTIME_ROOT}/lib" NO_DEFAULT_PATH)
-if(NOT ORT_INCLUDE OR NOT ORT_LIBRARY)
-    message(FATAL_ERROR "ONNXRUNTIME_ROOT must contain include/onnxruntime_cxx_api.h and lib/libonnxruntime.so")
-endif()
 
 # Native camera support is detected automatically. Robot builds require it;
 # workstations without the SDK can still run simulation and offline policy checks.
@@ -65,31 +84,28 @@ add_executable(g1_dwaq
     "${REPOSITORY_ROOT}/apps/dwaq/src/main.cpp"
     "${REPOSITORY_ROOT}/apps/dwaq/src/options.cpp"
     "${REPOSITORY_ROOT}/apps/dwaq/src/controller.cpp")
-target_include_directories(g1_dwaq PRIVATE "${REPOSITORY_ROOT}/apps/dwaq/include" "${COMMON_INCLUDE}" "${ORT_INCLUDE}")
-target_link_libraries(g1_dwaq PRIVATE unitree_sdk2 Boost::boost yaml-cpp "${ORT_LIBRARY}" Threads::Threads)
+target_include_directories(g1_dwaq PRIVATE "${REPOSITORY_ROOT}/apps/dwaq/include")
+target_link_libraries(g1_dwaq PRIVATE g1_tensorrt unitree_sdk2 Boost::boost yaml-cpp Threads::Threads)
 target_compile_definitions(g1_dwaq PRIVATE G1_WITH_POLICY
     G1_POLICY_DEFAULT_CONFIG="${REPOSITORY_ROOT}/apps/dwaq/config/g1_locomotion.json")
 add_executable(g1_parkour
     "${REPOSITORY_ROOT}/apps/parkour/src/main.cpp"
     "${REPOSITORY_ROOT}/apps/parkour/src/options.cpp"
     "${REPOSITORY_ROOT}/apps/parkour/src/controller.cpp")
-target_include_directories(g1_parkour PRIVATE "${REPOSITORY_ROOT}/apps/parkour/include" "${COMMON_INCLUDE}" "${ORT_INCLUDE}" ${OpenCV_INCLUDE_DIRS})
-target_link_libraries(g1_parkour PRIVATE g1_depth_camera unitree_sdk2 Boost::boost yaml-cpp "${ORT_LIBRARY}" ${OpenCV_LIBS} Threads::Threads)
+target_include_directories(g1_parkour PRIVATE "${REPOSITORY_ROOT}/apps/parkour/include" ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(g1_parkour PRIVATE g1_tensorrt g1_depth_camera unitree_sdk2 Boost::boost yaml-cpp ${OpenCV_LIBS} Threads::Threads)
 target_compile_definitions(g1_parkour PRIVATE
     G1_PARKOUR_DEFAULT_CONFIG="${REPOSITORY_ROOT}/apps/parkour/config/g1_parkour.json")
 add_executable(g1_hybrid
     apps/hybrid/src/main.cpp apps/hybrid/src/options.cpp apps/hybrid/src/controller.cpp
     apps/parkour/src/options.cpp apps/parkour/src/controller.cpp)
-target_include_directories(g1_hybrid PRIVATE apps/hybrid/include apps/dwaq/include apps/parkour/include
-    "${COMMON_INCLUDE}" "${ORT_INCLUDE}" ${OpenCV_INCLUDE_DIRS})
-target_link_libraries(g1_hybrid PRIVATE g1_depth_camera unitree_sdk2 Boost::boost yaml-cpp "${ORT_LIBRARY}" ${OpenCV_LIBS} Threads::Threads)
+target_include_directories(g1_hybrid PRIVATE apps/hybrid/include apps/dwaq/include apps/parkour/include ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(g1_hybrid PRIVATE g1_tensorrt g1_depth_camera unitree_sdk2 Boost::boost yaml-cpp ${OpenCV_LIBS} Threads::Threads)
 target_compile_definitions(g1_hybrid PRIVATE
     G1_PARKOUR_DEFAULT_CONFIG="${REPOSITORY_ROOT}/apps/hybrid/config/g1_hybrid.json")
-set_target_properties(g1_parkour g1_hybrid PROPERTIES INSTALL_RPATH_USE_LINK_PATH TRUE)
-# Launcher passes package-local resources. Keep ORT local after installation.
-set_target_properties(g1_dwaq PROPERTIES INSTALL_RPATH "$ORIGIN/../lib;${SDK_RUNTIME_DIR}")
-set_target_properties(g1_parkour PROPERTIES INSTALL_RPATH "$ORIGIN/../lib;${SDK_RUNTIME_DIR}")
-set_target_properties(g1_hybrid PROPERTIES INSTALL_RPATH "$ORIGIN/../lib;${SDK_RUNTIME_DIR}")
+set_target_properties(g1_dwaq g1_parkour g1_hybrid PROPERTIES
+    INSTALL_RPATH "$ORIGIN/../lib;${SDK_RUNTIME_DIR}"
+    INSTALL_RPATH_USE_LINK_PATH TRUE)
 if(UNIX AND NOT APPLE)
     target_link_options(g1_dwaq PRIVATE "-Wl,--disable-new-dtags")
     target_link_options(g1_parkour PRIVATE "-Wl,--disable-new-dtags")
@@ -106,14 +122,8 @@ install(FILES "${REPOSITORY_ROOT}/apps/realsense/static/realsense.html" DESTINAT
 install(PROGRAMS "${REPOSITORY_ROOT}/apps/realsense/realsense.sh" DESTINATION . RENAME realsense)
 install(PROGRAMS "${REPOSITORY_ROOT}/apps/parkour/parkour.sh" DESTINATION . RENAME parkour)
 install(FILES "${REPOSITORY_ROOT}/docs/PARKOUR.md" DESTINATION docs)
-install(FILES "${REPOSITORY_ROOT}/apps/dwaq/models/policy.onnx" DESTINATION apps/dwaq/models)
+install(DIRECTORY "${REPOSITORY_ROOT}/apps/dwaq/models" DESTINATION apps/dwaq)
 install(FILES "${REPOSITORY_ROOT}/apps/dwaq/config/g1_locomotion.json" DESTINATION apps/dwaq/config)
-# Preserve SONAME symlinks and their targets from the selected native ORT release.
-install(DIRECTORY "${ONNXRUNTIME_ROOT}/lib/" DESTINATION lib
-    FILES_MATCHING PATTERN "libonnxruntime.so*" PATTERN "libonnxruntime_providers_shared.so*")
-foreach(notice IN ITEMS LICENSE ThirdPartyNotices.txt Privacy.md VERSION_NUMBER)
-    install(FILES "${ONNXRUNTIME_ROOT}/${notice}" DESTINATION licenses/onnxruntime OPTIONAL)
-endforeach()
 install(PROGRAMS "${REPOSITORY_ROOT}/g1" DESTINATION .)
 install(PROGRAMS "${REPOSITORY_ROOT}/apps/monitor/monitor.sh" DESTINATION . RENAME monitor)
 install(FILES "${REPOSITORY_ROOT}/apps/monitor/joint_monitor.py" "${REPOSITORY_ROOT}/apps/monitor/requirements.txt" DESTINATION apps/monitor)

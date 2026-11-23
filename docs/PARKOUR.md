@@ -29,10 +29,10 @@ Parkour 动作处理可通过 `g1_parkour.json` 的 `raw_clip` 和 `clip_action_
 
 ## 编译与安装
 
-与主程序相同：使用与目标 CPU 匹配的 Unitree SDK2、ONNX Runtime、Boost、yaml-cpp 和 OpenCV C++（core/imgproc/photo，Ubuntu 为 `libopencv-dev`）。运行环境也需要对应 OpenCV 动态库。ARM64 机器人必须使用 aarch64 库。
+与主程序共用 TensorRT 8.5–10.x、CUDA Toolkit 和 Unitree SDK2。还需 Boost、yaml-cpp 和 OpenCV C++（core/imgproc/photo，Ubuntu 包名为 `libopencv-dev`）。ARM64 机器人使用 aarch64 库。自定义安装路径可传入 `TENSORRT_ROOT` 和 `CUDAToolkit_ROOT`，见 [构建说明](../README.md#在g1开发计算机上编译)。
 
 ```bash
-cmake -S . -B build -DONNXRUNTIME_ROOT=/path/to/native/onnxruntime \
+cmake -S . -B build \
   -DCMAKE_INSTALL_PREFIX="$PWD/install"
 cmake --build build -j4
 cmake --install build

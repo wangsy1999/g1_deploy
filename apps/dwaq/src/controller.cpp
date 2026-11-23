@@ -419,11 +419,15 @@ private:
 
 namespace g1_dwaq_app {
 namespace {
-int CheckPolicy(const Options& options) {
-    g1_policy::Policy policy(options.config);
+g1_policy::Joints RunStandingPolicy(g1_policy::Policy& policy) {
     g1_policy::State state;
     state.q = policy.DefaultDds();
-    const auto target = policy.Step(state, {0, 0, 0});
+    return policy.Step(state, {0, 0, 0});
+}
+
+int CheckPolicy(const Options& options) {
+    g1_policy::Policy policy(options.config);
+    const auto target = RunStandingPolicy(policy);
     std::cout << "Policy OK: " << policy.Interface() << ", dt=" << policy.dt << " s\nDDS targets:";
     for (float q : target) std::cout << ' ' << q;
     std::cout << '\n';
@@ -449,6 +453,9 @@ int RunControlSession(const Options& options) {
     std::unique_ptr<g1_policy::Policy> policy;
     if (!read_only) {
         policy = std::make_unique<g1_policy::Policy>(options.config);
+        // Initialize CUDA inference before starting the timed control loop.
+        RunStandingPolicy(*policy);
+        policy->Reset();
         std::cout << "Loaded locomotion policy, period " << policy->dt << " s\n";
     }
     std::unique_ptr<g1_hardware::Limits> hardware_limits;

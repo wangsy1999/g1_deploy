@@ -16,6 +16,8 @@ Usage: bash scripts/setup_robot.sh [options]
   --verify-camera         Test native C++ depth capture; no robot controller is started
   --install-system-deps   Install missing Ubuntu build packages using sudo apt-get
   --help                  Show this help
+Controller builds use the target's CUDA Toolkit and TensorRT C++ SDK.
+Set CUDAToolkit_ROOT and TENSORRT_ROOT for nonstandard install locations.
 Copy the project and offline cache yourself before running. No SSH, SCP, rsync,
 robot motion, time changes, system glibc replacement, or auto-start is performed.
 HELP
@@ -72,7 +74,6 @@ extract() {
 extract cpython-arm64.tar.gz "$deps/runtime" "$deps/runtime/python/bin/python3"
 extract unitree-sdk2-arm64.tar.gz "$deps/unitree-sdk2" "$deps/unitree-sdk2/lib/cmake/unitree_sdk2/unitree_sdk2Config.cmake"
 extract cyclonedds-0.10.2-arm64.tar.gz "$deps/cyclonedds" "$deps/cyclonedds/include/idl/retcode.h"
-extract onnxruntime-1.18.1-arm64.tar.gz "$deps/onnxruntime" "$deps/onnxruntime/lib/libonnxruntime.so"
 if [[ ! -e "$deps/glibc-2.35/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1" ]]; then
     mkdir -p "$deps/glibc-2.35"
     dpkg-deb -x "$cache/libc6_2.35-0ubuntu3.15_arm64.deb" "$deps/glibc-2.35"
@@ -106,7 +107,8 @@ if ((!deps_only)); then
     cmake -S "$root" -B "$root/build" -DCMAKE_BUILD_TYPE=Release \
         -DG1_REQUIRE_REALSENSE=ON \
         -DCMAKE_PREFIX_PATH="$deps/realsense" \
-        -DONNXRUNTIME_ROOT="$deps/onnxruntime" \
+        -DTENSORRT_ROOT="${TENSORRT_ROOT:-}" \
+        -DCUDAToolkit_ROOT="${CUDAToolkit_ROOT:-}" \
         -Dunitree_sdk2_DIR="$deps/unitree-sdk2/lib/cmake/unitree_sdk2" \
         -DCMAKE_INSTALL_PREFIX="$root/install"
     cmake --build "$root/build" -j"$jobs"
@@ -119,12 +121,12 @@ if ((!deps_only)); then
     "$python" - "$root/install" <<'PY'
 from pathlib import Path
 import sys
-for name in ('g1', 'monitor', 'realsense', 'parkour'):
+for name in ('g1', 'monitor', 'realsense', 'parkour', 'hybrid'):
     path = Path(sys.argv[1]) / name
     path.write_bytes(path.read_bytes().replace(b'\r\n', b'\n'))
     path.chmod(path.stat().st_mode | 0o111)
 PY
-    (cd "$root/install" && ./g1 check && ./g1 parkour check)
+    (cd "$root/install" && ./g1 check && ./g1 parkour check && ./g1 hybrid check)
 fi
 if ((verify_camera)); then
     [[ -x "$root/build/g1_camera_check" ]] || { echo 'Build the native camera check before --verify-camera.' >&2; exit 1; }

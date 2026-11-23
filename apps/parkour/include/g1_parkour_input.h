@@ -12,7 +12,7 @@
 namespace g1_parkour {
 using DepthFrame = g1_camera::DepthFrame;
 // 同机同用户的最新帧邮箱。生产者独占 .owner 锁，读者只接受活跃生产者的数据。
-// 文件锁覆盖帧头和数据的整次复制；锁忙或序号未变时跳过，不阻塞控制循环。
+// 文件锁覆盖帧头和数据的整次复制；锁忙或帧头未变时跳过，不阻塞控制循环。
 class SharedInput {
     std::string path_;
     std::size_t size_;
@@ -70,8 +70,17 @@ public:
             ~Unlock() { if (fd >= 0) flock(fd, LOCK_UN); }
         } unlock{fd_};
         struct stat status{};
-        if (fstat(fd_, &status) || status.st_nlink == 0 || status.st_size != static_cast<off_t>(size_)) {
-            throw std::runtime_error("Shared input replaced or wrong size; restart controller");
+        if (fstat(fd_, &status)) throw std::runtime_error("Cannot stat shared input");
+        if (status.st_nlink == 0) {
+            // The simulator reopened the mailbox. Read the new file on the next poll.
+            close(fd_);
+            fd_ = -1;
+            unlock.fd = -1;
+            have_header_ = false;
+            return false;
+        }
+        if (status.st_size != static_cast<off_t>(size_)) {
+            throw std::runtime_error("Wrong shared input frame size");
         }
         std::array<unsigned char, 32> header{};
         if (pread(fd_, header.data(), header.size(), 0) != 32) {

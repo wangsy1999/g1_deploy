@@ -11,7 +11,7 @@ No MuJoCo simulator, XML or mesh assets are copied into this repository.
 Extracted from the working tree of `wangsy1999/unitree_mujoco`, based on commit `7c6642f89e25f72dd7de3cf7683f166bce943fef`.
 The source includes subsequent local DreamWaQ hardware deployment changes.
 This is an independent source tree; no submodule, symlink or parent repository is required.
-The original repository LICENSE is retained. Unitree SDK2 and ONNX Runtime are external dependencies.
+The original repository LICENSE is retained. Unitree SDK2, CUDA, and TensorRT are external dependencies.
 
 The web monitor was synchronized from the tested robot deployment on 2026-10-19.
 It originates from `simulate_python/joint_monitor.py` and
