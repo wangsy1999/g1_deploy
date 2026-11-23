@@ -327,7 +327,7 @@
     "limit_target_position": true,
     "state_timeout_ms": 100,
     "max_tilt_rad": 1.0,
-    "max_temperature_c": 70,
+    "max_temperature_c": 100,
     "stop_kd": 1,
     "damping_seconds": 0.5,
     "joint_lower": [
