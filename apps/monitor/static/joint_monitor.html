@@ -10,7 +10,7 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;fl
 .status{padding:9px 15px;border:1px solid #354257;border-radius:30px;color:#a6b5c9}.live{color:#6ee7b7;border-color:#326253}.bad{color:#fbbf75;border-color:#85613b}
 .stats{display:flex;gap:30px;margin:24px 0;padding:18px 22px;background:#131d2b;border:1px solid #25334a;border-radius:12px}.stats span{color:#91a0b5}.stats b{display:block;margin-top:5px;font-size:22px;color:#eef4ff;font-variant-numeric:tabular-nums}
 .layout{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(300px,1fr);gap:20px}.panel{background:#111b29;border:1px solid #25334a;border-radius:12px;overflow:hidden}
-.toolbar{display:flex;gap:10px;padding:16px;align-items:center;flex-wrap:wrap}input,select,button{font:inherit;color:#dce5f1;background:#0b1422;border:1px solid #34445d;border-radius:7px;padding:9px 12px}input{flex:1;min-width:130px}button{cursor:pointer}button:hover{border-color:#65d4c4}
+.toolbar{display:flex;gap:10px;padding:16px;align-items:center;flex-wrap:wrap}input,select,button{font:inherit;color:#dce5f1;background:#0b1422;border:1px solid #34445d;border-radius:7px;padding:9px 12px}input{flex:1;min-width:130px}button{cursor:pointer}button:not(:disabled):hover{border-color:#65d4c4}button:disabled{opacity:.45;cursor:not-allowed}.recording-panel{margin-top:20px}.recording-panel p{padding:0 16px 16px;font-size:12px}.recording-panel .toolbar{padding-bottom:10px}.is-recording{color:#fbbf75;border-color:#85613b}.recording-summary{color:#a3b4cd;font-variant-numeric:tabular-nums}
 .scroll{max-height:70vh;overflow:auto}table{border-collapse:collapse;width:100%;white-space:nowrap;font-size:12px}th,td{padding:10px 12px;text-align:right;border-bottom:1px solid #233047;font-variant-numeric:tabular-nums}th{background:#172337;position:sticky;top:0;color:#a3b4cd;z-index:1}th:first-child,td:first-child{text-align:left}tbody tr{cursor:pointer}tbody tr:hover{background:#1b2c42}tr.selected{background:#1c3548}td:first-child{color:#b7cde5}td.inactive{color:#77879d}
 .detail{padding:18px}.detail h2{font-size:15px;word-break:break-all;margin:0 0 8px}label{color:#a3b4cd}canvas{width:100%;height:150px;display:block;margin:8px 0 18px;background:#0b1422;border-radius:8px}.joint-check{width:16px;height:16px;min-width:0;padding:0;flex:none;accent-color:#63ddcc;cursor:pointer}.joint-legend{display:flex;flex-wrap:wrap;gap:8px 14px;margin-bottom:14px;font-size:12px;word-break:break-all}.legend{font-size:12px;color:#91a0b5;margin:10px 0 18px}.measured{color:#63ddcc}.target{color:#fbbf75}.empty{padding:40px;text-align:center;color:#91a0b5}footer{margin-top:18px;color:#77879d;font-size:12px;line-height:1.8}
 .imu-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:20px}.imu-card{padding:16px}.imu-card h2{font-size:14px;color:#a3b4cd;margin:0 0 12px}.imu-vector{display:flex;gap:16px;flex-wrap:wrap}.imu-vector span{color:#91a0b5}.imu-vector b{display:block;margin-top:4px;color:#dce5f1;font-size:17px;font-variant-numeric:tabular-nums}@media(max-width:1000px){.imu-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:500px){.imu-grid{grid-template-columns:1fr}}
@@ -19,6 +19,10 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;fl
 </head>
 <body>
 <header><div><h1>G1 <span style="color:#63ddcc">/</span> 关节实时监控</h1><p>查看关节状态、跟踪误差与最近 20 秒的变化</p></div><div id="status" class="status" role="status">正在连接…</div></header>
+<section class="panel recording-panel" aria-label="CSV 数据记录">
+<div class="toolbar"><button id="recordCsv" disabled>开始新记录</button><button id="downloadCsv" disabled>下载 CSV</button><select id="csvFiles" aria-label="选择 CSV 记录文件"><option value="">暂无记录文件</option></select><span id="csvStatus" role="status">正在读取记录状态…</span><span id="csvSummary" class="recording-summary">0 帧</span></div>
+<p>记录全部关节和两路 IMU，每个采样帧一行，持续写入机器人磁盘；刷新或关闭网页不会停止记录。暂停显示、搜索和绘图选择不影响记录。角度固定 rad，速度 rad/s，力矩 Nm，温度 °C，加速度 m/s²。停止后可选择文件下载。<br><span id="csvDirectory"></span></p>
+</section>
 <div class="stats"><span>控制端 Enable<b id="enable">—</b></span><span>关节数量<b id="count">—</b></span><span>监控时间 / s<b id="time">—</b></span><span>最大跟踪误差<b id="error">—</b></span><span>数据年龄 / ms<b id="age">—</b></span></div>
 <h2 style="font-size:18px">Torso IMU · 躯干 <span id="torso-status" class="status">等待数据</span></h2><p style="margin-bottom:14px">来源 rt/secondary_imu · Parkour 使用此 IMU · 超过 100 ms 标记过期</p><section class="imu-grid torso-grid" aria-label="Torso IMU 实时读数">
 <div class="panel imu-card"><h2 id="torso-rpy-label">姿态 RPY / rad</h2><div class="imu-vector"><span>Roll<b id="torso-rpy-0">—</b></span><span>Pitch<b id="torso-rpy-1">—</b></span><span>Yaw<b id="torso-rpy-2">—</b></span></div></div>
@@ -33,9 +37,9 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;fl
 </section>
 <main class="layout">
 <section class="panel" aria-label="关节数据"><div class="toolbar"><input id="search" placeholder="搜索关节，例如 elbow" aria-label="搜索关节"><select id="unit" aria-label="角度单位"><option value="rad">弧度 rad</option><option value="deg">角度 °</option></select><button id="pause">暂停显示</button></div>
-<div class="scroll"><table><thead><tr><th>绘图</th><th>关节 / DDS ID</th><th>Enable</th><th id="qHead">角度 rad</th><th>目标</th><th>误差</th><th id="vHead">速度 rad/s</th><th>力矩 Nm</th><th>Kp / Kd</th></tr></thead><tbody id="rows"></tbody></table><div id="empty" class="empty">等待机器人数据…</div></div></section>
-<section class="panel detail"><h2 id="selected">勾选关节查看曲线</h2><p id="control">可同时勾选多个关节</p><div id="jointLegend" class="joint-legend"></div><div class="legend">━ 实际值　┄ 同色虚线为目标值</div><label id="angleLabel">角度 / rad</label><canvas id="angle" aria-label="关节角度曲线"></canvas><label id="speedLabel">速度 / rad/s</label><canvas id="speed" aria-label="关节速度曲线"></canvas><label>反馈力矩 / Nm</label><canvas id="torque" aria-label="关节力矩曲线"></canvas></section>
-</main><footer>网页仅用于查看。Torso IMU 来自 rt/secondary_imu，Pelvis IMU 来自 LowState；两路独立显示。RPY 由 w,x,y,z 四元数计算；加速度为原始反馈，未去除重力。Enable 为控制端命令输出开关；使能状态超过 500 ms 未更新时显示为 —。C++ 控制程序中按 P 复位、R 进入策略；未按 9 时为空跑，虚线仅为计算目标，机器人不跟随。空跑不改变其他控制服务的状态。力矩为 DDS LowState 的 tau_est 反馈值；目标由独立话题推送，未使能也显示；目标数据超过 500 ms 未更新时显示为 —。后台默认最高 50 Hz 采样并推送，网页按屏幕刷新率绘制。</footer>
+<div class="scroll"><table><thead><tr><th>绘图</th><th>关节 / DDS ID</th><th>Enable</th><th id="qHead">角度 rad</th><th>目标</th><th>误差</th><th id="vHead">速度 rad/s</th><th>力矩 Nm</th><th>温度 0 / °C</th><th>温度 1 / °C</th><th>Kp / Kd</th></tr></thead><tbody id="rows"></tbody></table><div id="empty" class="empty">等待机器人数据…</div></div></section>
+<section class="panel detail"><h2 id="selected">勾选关节查看曲线</h2><p id="control">可同时勾选多个关节</p><div id="jointLegend" class="joint-legend"></div><div class="legend">━ 实际值　┄ 同色虚线为目标值</div><label id="angleLabel">角度 / rad</label><canvas id="angle" aria-label="关节角度曲线"></canvas><label id="speedLabel">速度 / rad/s</label><canvas id="speed" aria-label="关节速度曲线"></canvas><label>反馈力矩 / Nm</label><canvas id="torque" aria-label="关节力矩曲线"></canvas><label>温度 / °C · 通道 0 实线，通道 1 虚线</label><canvas id="temperature" aria-label="关节双通道温度曲线"></canvas></section>
+</main><footer>网页仅用于查看和记录数据，不发送运动控制指令。Torso IMU 来自 rt/secondary_imu，Pelvis IMU 来自 LowState；两路独立显示。RPY 由 w,x,y,z 四元数计算；加速度为原始反馈，未去除重力。Enable 为控制端命令输出开关；使能状态超过 500 ms 未更新时显示为 —。C++ 控制程序中按 P 复位、R 进入策略；未按 9 时为空跑，虚线仅为计算目标，机器人不跟随。空跑不改变其他控制服务的状态。温度 0/1 分别来自 LowState 电机 temperature[0/1]，缺失或无效值显示为 —。力矩为 DDS LowState 的 tau_est 反馈值；目标由独立话题推送，未使能也显示；目标数据超过 500 ms 未更新时显示为 —。后台默认最高 50 Hz 采样并推送，网页按屏幕刷新率绘制。</footer>
 <script>
 'use strict';
 const $=id=>document.getElementById(id);
@@ -46,6 +50,7 @@ let rateStarted=performance.now(), rateSamples=0, measuredRate=0, receivedSample
 const factor=()=>$('unit').value==='deg'?180/Math.PI:1;
 const suffix=()=>$('unit').value==='deg'?'°':'rad';
 const fmt=x=>Number.isFinite(x)?x.toFixed(3):'—';
+const fmtTemperature=x=>Number.isFinite(x)?x.toFixed(1):'—';
 function status(text,kind=''){ $('status').textContent=text; $('status').className='status '+kind; }
 const jointColor=index=>`hsl(${(index*137.508)%360} 75% 67%)`;
 function selectJoint(name,checked){
@@ -58,7 +63,7 @@ function renderTorsoImu(){
  const fresh=torso?.fresh&&age!==null&&age<100;
  const imu=fresh?torso.data:null;
  const badge=$('torso-status');
- badge.textContent=!torso?.samples?'未收到':!torso.valid?'无效数据':fresh?`在线 · ${Math.round(age)} ms`:`已过期 · ${Math.round(age)} ms`;
+ badge.textContent=!torso?.samples?'未收到':!torso.valid?'无效数据':fresh?'在线':`已过期 · ${Math.round(age)} ms`;
  badge.className='status '+(fresh?'live':'bad');
  $('torso-rpy-label').textContent='姿态 RPY / '+suffix();
  $('torso-gyroscope-label').textContent='角速度 / '+suffix()+'/s';
@@ -95,13 +100,13 @@ function render(){
    const cell=document.createElement('td'),checkbox=document.createElement('input');
    checkbox.type='checkbox';checkbox.className='joint-check';checkbox.setAttribute('aria-label','绘图 '+joint.name);
    checkbox.onchange=()=>selectJoint(joint.name,checkbox.checked);cell.appendChild(checkbox);row.appendChild(cell);
-   for(let i=0;i<8;i++)row.appendChild(document.createElement('td'));
+   for(let i=0;i<10;i++)row.appendChild(document.createElement('td'));
    rowCache.set(joint.name,row);$('rows').appendChild(row);
   }
   row.className=selected.has(joint.name)?'selected':'';
   row.children[0].children[0].checked=selected.has(joint.name);
   row.hidden=!joint.name.toLowerCase().includes(query);
-  const values=[joint.name+' / '+joint.index,joint.enabled===true?'ON':joint.enabled===false?'OFF':'—',fmt(joint.q*f),joint.target_available?fmt(joint.q_target*f):'—',joint.target_available?fmt(joint.error*f):'—',fmt(joint.dq*f),fmt(joint.tau),joint.kp+' / '+joint.kd];
+  const values=[joint.name+' / '+joint.index,joint.enabled===true?'ON':joint.enabled===false?'OFF':'—',fmt(joint.q*f),joint.target_available?fmt(joint.q_target*f):'—',joint.target_available?fmt(joint.error*f):'—',fmt(joint.dq*f),fmt(joint.tau),fmtTemperature(joint.temperature_0_c),fmtTemperature(joint.temperature_1_c),joint.kp+' / '+joint.kd];
   values.forEach((value,i)=>{if(row.children[i+1].textContent!==String(value))row.children[i+1].textContent=value;});
   row.children[2].style.color=joint.enabled===true?'#6ee7b7':joint.enabled===false?'#fbbf75':'#91a0b5';
  }
@@ -113,7 +118,7 @@ function render(){
   const label=document.createElement('span');label.style.color=jointColor(joint.index);label.textContent='━ '+joint.name;$('jointLegend').appendChild(label);
  }
  $('angleLabel').textContent='角度 / '+suffix();$('speedLabel').textContent='速度 / '+suffix()+'/s';
- plot('angle','q','qt');plot('speed','v','vt');plot('torque','tau');
+ plot('angle','q','qt');plot('speed','v','vt');plot('torque','tau');plot('temperature','temperature0','temperature1');
 }
 function record(){
  if(!latest)return;
@@ -121,7 +126,7 @@ function record(){
   const series=histories.get(joint.name);if(!series||series.sample===latest.sample_id)continue;
   const t=latest.simulation_time,points=series.points;
   if(points.length&&t<points.at(-1).t)points.length=0;
-  points.push({t,q:joint.q,qt:joint.target_available?joint.q_target:null,v:joint.dq,vt:joint.target_available?joint.dq_target:null,tau:joint.tau});
+  points.push({t,q:joint.q,qt:joint.target_available?joint.q_target:null,v:joint.dq,vt:joint.target_available?joint.dq_target:null,tau:joint.tau,temperature0:joint.temperature_0_c,temperature1:joint.temperature_1_c});
   while(points.length&&(points[0].t<t-20||points.length>10000))points.shift();
   series.sample=latest.sample_id;
  }
@@ -133,10 +138,11 @@ function plot(id,key,target){
  const ctx=canvas.getContext('2d');ctx.setTransform(scale,0,0,scale,0,0);ctx.clearRect(0,0,w,h);
  const series=latest.joints.filter(j=>selected.has(j.name)).map(j=>({color:jointColor(j.index),points:histories.get(j.name).points})).filter(s=>s.points.length);
  if(!series.length){ctx.fillStyle='#91a0b5';ctx.font='12px system-ui';ctx.fillText('请勾选需要绘图的关节',20,75);return;}
- const f=key==='tau'?1:factor();let low=Infinity,high=-Infinity;
+ const f=(key==='tau'||key==='temperature0')?1:factor();let low=Infinity,high=-Infinity;
  for(const s of series)for(const p of s.points)for(const field of target?[key,target]:[key]){
   if(Number.isFinite(p[field])){low=Math.min(low,p[field]*f);high=Math.max(high,p[field]*f);}
  }
+ if(!Number.isFinite(low)||!Number.isFinite(high)){ctx.fillStyle='#91a0b5';ctx.font='12px system-ui';ctx.fillText('暂无有效数据',20,75);return;}
  const padding=Math.max((high-low)*.15,.01);low-=padding;high+=padding;
  const end=latest.simulation_time,begin=end-20;
  const x=t=>48+(t-begin)/20*(w-62),y=v=>12+(high-v)/(high-low)*(h-36);
@@ -147,6 +153,64 @@ function plot(id,key,target){
   for(const p of points){if(!Number.isFinite(p[field])){started=false;continue;}if(!started){ctx.moveTo(x(p.t),y(p[field]*f));started=true;}else ctx.lineTo(x(p.t),y(p[field]*f));}ctx.stroke();}
  for(const s of series){line(s.points,key,s.color,[]);if(target)line(s.points,target,s.color,[5,4]);}
 }
+// Recording lives on the robot; browser reconnections only refresh its status.
+let csvState=null,csvBusy=false;
+function renderCsvState(state){
+ csvState=state;
+ const saving=state.saving&&!state.recording;
+ $('recordCsv').textContent=state.recording?'停止记录':saving?'正在保存…':'开始新记录';
+ $('recordCsv').className=state.recording?'is-recording':'';
+ $('recordCsv').disabled=csvBusy||saving;
+ $('csvStatus').textContent=state.error|| (state.recording?'正在写入机器人磁盘':saving?'正在保存最后的数据':'记录已停止');
+ $('csvStatus').className=state.error?'bad':'';
+ $('csvSummary').textContent=state.rows+' 帧'+(state.lost_samples?' · 丢失 '+state.lost_samples+' 帧':'');
+ $('csvDirectory').textContent='机器人保存目录：'+state.directory;
+ const choice=$('csvFiles').value,files=state.files||[];
+ $('csvFiles').replaceChildren();
+ if(!files.length){const option=document.createElement('option');option.value='';option.textContent='暂无记录文件';$('csvFiles').appendChild(option);}
+ for(const file of files){
+  const option=document.createElement('option');option.value=file.name;
+  option.textContent=file.name+' · '+(file.bytes/1024/1024).toFixed(2)+' MB';
+  $('csvFiles').appendChild(option);
+ }
+ if(files.some(file=>file.name===choice))$('csvFiles').value=choice;
+ updateCsvDownload();
+}
+function updateCsvDownload(){
+ const file=$('csvFiles').value;
+ $('downloadCsv').disabled=!file||!csvState||(file===csvState.filename&&csvState.saving);
+}
+async function csvRequest(path,method='GET'){
+ const response=await fetch(path,{method,cache:'no-store',...(method==='POST'?{headers:{'Content-Type':'application/json'},body:'{}'}:{})});
+ const state=await response.json();
+ if(!response.ok)throw new Error(state.error||'记录请求失败');
+ return state;
+}
+async function refreshCsv(){
+ if(csvBusy)return;
+ try{renderCsvState(await csvRequest('/api/recordings'));}
+ catch(error){$('csvStatus').textContent='无法获取记录状态：'+error.message;$('recordCsv').disabled=true;$('downloadCsv').disabled=true;}
+}
+$('recordCsv').onclick=async()=>{
+ if(csvBusy||!csvState)return;
+ csvBusy=true;$('recordCsv').disabled=true;
+ const starting=!csvState.recording;
+ try{
+  const state=await csvRequest('/api/recordings/'+(starting?'start':'stop'),'POST');renderCsvState(state);
+  if(starting){$('csvFiles').value=state.filename;updateCsvDownload();}
+ }
+ catch(error){$('csvStatus').textContent='记录操作失败：'+error.message;}
+ finally{csvBusy=false;$('recordCsv').disabled=!csvState||(csvState.saving&&!csvState.recording);}
+};
+$('csvFiles').onchange=updateCsvDownload;
+$('downloadCsv').onclick=()=>{
+ if($('downloadCsv').disabled)return;
+ const link=document.createElement('a');
+ link.href='/api/recordings/download?name='+encodeURIComponent($('csvFiles').value);
+ link.download=$('csvFiles').value;document.body.appendChild(link);link.click();link.remove();
+};
+refreshCsv();
+const csvPoll=setInterval(refreshCsv,1000);
 // One persistent connection; ingest every received sample independently of drawing.
 const stream=new EventSource('/api/stream');
 stream.onmessage=event=>{
@@ -162,7 +226,7 @@ stream.onmessage=event=>{
 stream.onerror=()=>status('连接中断 · 自动重试','bad');
 function draw(){if(dirty){dirty=false;render();}else if(latest&&!paused){renderTorsoImu();}requestAnimationFrame(draw);}
 requestAnimationFrame(draw);
-window.addEventListener('beforeunload',()=>stream.close());
+window.addEventListener('pagehide',()=>{stream.close();clearInterval(csvPoll);});
 $('search').oninput=render;$('unit').onchange=render;
 $('pause').onclick=()=>{paused=!paused;$('pause').textContent=paused?'继续显示':'暂停显示';if(!paused)clearHistory();};
 window.addEventListener('resize',()=>{dirty=true;});

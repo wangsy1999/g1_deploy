@@ -202,7 +202,7 @@ python3 apps/monitor/joint_monitor.py --domain 1 --interface lo --host 127.0.0.1
 python3 apps/monitor/joint_monitor.py --domain 0 --interface eth0 --host 0.0.0.0 --port 8765 --rate 50
 ```
 
-浏览器打开 `http://机器人IP:8765/`（本机仿真用 `http://127.0.0.1:8765/`）。网页显示 29 关节状态、IMU、真实命令及空跑目标，过期数据显示离线；网页不能发送运动命令，Ctrl+C 结束服务。
+浏览器打开 `http://机器人IP:8765/`（本机仿真用 `http://127.0.0.1:8765/`）。网页显示 29 关节状态（含双通道温度）、IMU、真实命令及空跑目标，过期数据显示离线；网页不能发送运动命令，Ctrl+C 结束服务。页面顶部可开始/停止 CSV 记录并下载，文件持续写入机器人 `~/logs/`，刷新或关闭网页不会停止记录；记录不受显示暂停和绘图选择影响。
 安装后使用 `./g1 monitor eth0 0.0.0.0 8765`。包装脚本省略监听地址和端口时，默认 `127.0.0.1:8765`。
 
 ## 快速使用：原配遥控器与网页
@@ -480,6 +480,6 @@ DreamWaQ左杆前后控制前后速度、左右控制横移，右杆左右控制
 
 ## 验证范围
 
-仓库不构建自动化测试程序。日常手动检查可使用 `./g1 check`、`./g1 parkour check`、`./g1 hybrid check` 验证离线推理，使用 `./bin/g1_camera_check` 验证真实相机采集。
+CMake 不构建自动化测试程序。CSV 记录功能可用 `python3 -m unittest discover -s tests -p test_monitor_recording.py -v` 验证（无需 DDS 或机器人）。日常手动检查可使用 `./g1 check`、`./g1 parkour check`、`./g1 hybrid check` 验证离线推理，使用 `./bin/g1_camera_check` 验证真实相机采集。
 
 历史测试和现场调试结果见 [改动总结](CHANGELOG.md)。离线推理和空跑不能替代实机运动验收，具体运行工况以现场记录为准；硬件接管要求见 [硬件控制说明](docs/HARDWARE.md)。

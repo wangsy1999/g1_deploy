@@ -12,7 +12,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import threading
 import time
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
+import shutil
+
+if __package__:
+    from .csv_recorder import CsvRecorder
+else:
+    from csv_recorder import CsvRecorder
 
 
 JOINT_NAMES = (
@@ -50,8 +56,24 @@ def read_imu_state(source):
             "accelerometer": vector("accelerometer", 3)}
 
 
+def read_motor_temperature(motor):
+    """Preserve both HG temperature channels; absent/invalid readings stay blank."""
+    try:
+        values = list(getattr(motor, 'temperature', ()))
+    except TypeError:
+        values = []
+    result = []
+    for index in range(2):
+        try:
+            value = float(values[index])
+            result.append(value if math.isfinite(value) else None)
+        except (IndexError, TypeError, ValueError, OverflowError):
+            result.append(None)
+    return result
+
+
 class JointMonitor:
-    def __init__(self, host="127.0.0.1", port=8765, rate_hz=50):
+    def __init__(self, host="127.0.0.1", port=8765, rate_hz=50, record_dir=None):
         if not math.isfinite(rate_hz) or rate_hz <= 0:
             raise ValueError("Joint monitor rate must be positive")
         self.period = 1.0 / rate_hz
@@ -75,11 +97,18 @@ class JointMonitor:
         self.started_at = time.monotonic()
         self.next_capture = self.started_at
         self.html = (Path(__file__).parent / "static" / "joint_monitor.html").read_bytes()
+        self.recorder = CsvRecorder(record_dir or Path.home() / "logs", self.names)
         monitor = self
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
                 path = urlsplit(self.path).path
+                if path == "/api/recordings":
+                    self.json_response(monitor.recorder.status())
+                    return
+                if path == "/api/recordings/download":
+                    self.download_csv()
+                    return
                 if path == "/api/stream":
                     self.stream()
                     return
@@ -100,6 +129,62 @@ class JointMonitor:
                 self.end_headers()
                 try:
                     self.wfile.write(content)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+
+            def json_response(self, state, code=200):
+                content = json.dumps(state, allow_nan=False).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(content)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                try:
+                    self.wfile.write(content)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+
+            def do_POST(self):
+                path = urlsplit(self.path).path
+                if path not in ("/api/recordings/start", "/api/recordings/stop"):
+                    self.send_error(404)
+                    return
+                origin = self.headers.get("Origin")
+                if ((origin and urlsplit(origin).netloc != self.headers.get("Host")) or
+                        self.headers.get("Content-Type", "").split(";")[0] != "application/json"):
+                    self.json_response({"error": "仅接受同源 JSON 请求"}, 403)
+                    return
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    if not 0 <= length <= 1024:
+                        raise ValueError("请求过大")
+                    json.loads(self.rfile.read(length) or b'{}')
+                    if path.endswith("/start"):
+                        monitor.recorder.start()
+                    else:
+                        monitor.recorder.stop()
+                    self.json_response(monitor.recorder.status())
+                except ValueError as error:
+                    self.json_response({"error": str(error)}, 409)
+                except OSError as error:
+                    self.json_response({"error": str(error)}, 500)
+
+            def download_csv(self):
+                name = parse_qs(urlsplit(self.path).query).get("name", [None])[0]
+                try:
+                    path = monitor.recorder.download_path(name)
+                    with path.open('rb') as handle:
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/csv; charset=utf-8")
+                        self.send_header("Content-Disposition", f'attachment; filename="{path.name}"')
+                        self.send_header("Content-Length", str(path.stat().st_size))
+                        self.send_header("Cache-Control", "no-store")
+                        self.end_headers()
+                        shutil.copyfileobj(handle, self.wfile)
+                except FileNotFoundError:
+                    self.send_error(404)
+                except ValueError as error:
+                    self.json_response({"error": str(error)}, 409)
                 except (BrokenPipeError, ConnectionResetError):
                     pass
 
@@ -201,12 +286,14 @@ class JointMonitor:
         for i, name in enumerate(self.names):
             motor = msg.motor_state[i]
             q, dq, tau = float(motor.q), float(motor.dq), float(motor.tau_est)
+            temperature = read_motor_temperature(motor)
             desired = dry_target if dry_run else target if target_fresh else command
             q_target, dq_target, kp, kd, _ = (
                 desired[i] if desired is not None else (0, 0, 0, 0, 0))
             actual_command = command[i] if command is not None else (0, 0, 0, 0, 0)
             joints.append({
                 "index": i, "name": name, "q": q, "dq": dq, "tau": tau,
+                "temperature_0_c": temperature[0], "temperature_1_c": temperature[1],
                 "q_target": q_target, "dq_target": dq_target,
                 "kp": kp, "kd": kd, "error": q_target - q,
                 "target_available": dry_run or target_fresh or command_fresh,
@@ -225,6 +312,7 @@ class JointMonitor:
         with self.changed:
             self.snapshot = state
             self.last_capture = now
+            self.recorder.submit(self.snapshot_locked())
             # Keep a fixed schedule rather than adding callback jitter to each period.
             slots = int((now - self.next_capture) / self.period) + 1
             self.next_capture += slots * self.period
@@ -270,6 +358,7 @@ class JointMonitor:
             self.server.shutdown()
             self.thread.join(timeout=2)
         self.server.server_close()
+        self.recorder.stop()
 
 
 def main():
@@ -280,13 +369,15 @@ def main():
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--rate", type=float, default=50,
                         help="DDS sampling limit in Hz (default: 50)")
+    parser.add_argument("--record-dir", type=Path,
+                        help="CSV directory (default: ~/logs)")
     args = parser.parse_args()
     if args.domain < 0 or not 1 <= args.port <= 65535 or not math.isfinite(args.rate) or args.rate <= 0:
         parser.error("domain must be nonnegative; rate must be positive; port must be 1..65535")
     from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelSubscriber
     from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_, LowCmd_, IMUState_
 
-    monitor = JointMonitor(args.host, args.port, args.rate)
+    monitor = JointMonitor(args.host, args.port, args.rate, args.record_dir)
     subscribers = []
     try:
         ChannelFactoryInitialize(args.domain, args.interface)
