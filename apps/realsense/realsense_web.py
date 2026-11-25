@@ -3,6 +3,12 @@
 No DDS imports, robot commands, Torch or GUI dependencies. --mock is explicitly
 synthetic and intended for HTTP/protocol checks without a connected camera.
 """
+# Direct python3 invocation also discovers the installed environment.
+if __name__ == "__main__":
+    from pathlib import Path as _Path
+    import runpy as _runpy
+    _runpy.run_path(str(_Path(__file__).resolve().parents[1] / "python_runtime.py"))["ensure_runtime"](__file__, camera=True)
+
 import argparse
 import json
 import math

@@ -12,18 +12,15 @@ CPU架构匹配的CycloneDDS C运行库、Python依赖，以及官方`unitree_sd
 本次机器人验证环境为Ubuntu 22.04 / aarch64 / Python 3.10 / CycloneDDS Python 0.10.2。
 SDK及CycloneDDS运行库和控制程序使用同一套，避免混用ROS环境中的另一套DDS库。
 
-如果Python已经能导入`unitree_sdk2py`和`cyclonedds`，可直接运行。
-否则，在仓库根目录安装到项目内；将下面的SDK源码路径替换为本机官方Python SDK路径：
+机器人首次使用在项目根目录执行：
 
 ```bash
-CYCLONEDDS_HOME=/usr/local python3 -m pip install --target .python-deps -r apps/monitor/requirements.txt
-python3 -m pip install --no-deps --target .python-deps /path/to/unitree_sdk2_python
+bash scripts/setup_robot.sh --deps-only
 ```
 
-官方Python SDK来源：https://github.com/unitreerobotics/unitree_sdk2_python 。
-`--no-deps`避免安装本监控不使用的摄像头依赖，所需DDS和NumPy已在上一步安装。
-`.python-deps/`是本机依赖目录，不提交Git。若使用虚拟环境，可通过`PYTHON_BIN`指定解释器。
+依赖自动安装到 `~/.local/share/g1-deploy/aarch64/`。之后 shell 启动入口与直接运行 `python3 apps/monitor/joint_monitor.py ...` 都会自动选择该解释器并配置 DDS 动态库路径，无需 `source .../activate`，也不需要手动设置 `PYTHONPATH` 或 `LD_LIBRARY_PATH`。新终端中直接运行即可。
 
+使用其它环境时可指定 `PYTHON_BIN=/path/to/venv/bin/python3`，同样无需激活。旧项目 `.deps/` 和 `.python-deps/` 仍兼容。
 ## 从源码目录启动
 
 ```bash
@@ -43,7 +40,7 @@ python3 apps/monitor/joint_monitor.py --domain 0 --interface enP8p1s0 \
     --host 192.168.123.164 --port 8765 --rate 50
 ```
 
-直接运行Python时，需要已安装依赖或自行将`.python-deps`加入`PYTHONPATH`。
+直接运行 Python 后端也会在导入依赖前自动选择解释器，与 shell 入口一样无需激活环境。
 
 ## 安装目录
 
@@ -55,7 +52,7 @@ cd install
 # 等效入口：./g1 monitor enP8p1s0 192.168.123.164 8765
 ```
 
-Python依赖不打进CMake安装包，需由目标机器环境提供，或安装到安装目录的`.python-deps/`。
+Python 依赖不打进 CMake 安装包；源码和安装目录都会自动使用机器人固定目录中的 Python 环境。目标机器首次使用先运行配置脚本安装依赖。
 网页静态文件按Python源码位置加载，目录整体移动后仍能使用。
 
 ## 接口

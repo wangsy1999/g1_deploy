@@ -163,7 +163,7 @@ python3 apps/simulation/sim.py --mujoco-root /path/to/unitree_mujoco --domain 1
 ### RealSense：查看相机与转发策略深度
 
 独立网页预览的 Python 依赖为 NumPy、OpenCV 和与目标设备匹配的 `pyrealsense2`，版本范围见 `apps/realsense/requirements.txt`；需要已可工作的 RealSense SDK/USB 相机。
-启动脚本支持 `PYTHON_BIN=/path/to/python3` 指定解释器。
+Python 启动入口会自动选择机器人固定目录中的解释器，无需 `source` 激活环境；直接运行监控和相机的 `.py` 文件也支持。需要指定其它解释器时使用 `PYTHON_BIN=/path/to/python3`。
 
 ```bash
 # 独立深度网页预览；启动实机控制前须退出；默认 480×270、60 Hz、Instinct 预处理，RGB 默认关闭
@@ -296,14 +296,15 @@ bash apps/monitor/monitor.sh enP8p1s0 192.168.123.164 8765
 
 ## 一键配置当前 ARM64 机器人
 
-先**手动复制**本项目与 `.deploy-cache/robot-arm64/` 到机器人，再在项目根目录运行：
+将本项目复制或克隆到机器人，在项目根目录运行（无需提前准备依赖缓存）：
 
 ```bash
 bash scripts/setup_robot.sh
 ```
 
-该入口离线配置项目独立的 Python、SDK、ONNX Runtime 与相机专用 glibc 2.35，然后编译和安装。
+该入口默认自动安装缺失的系统编译包，并自动下载、安装缺失的 Python、SDK、ONNX Runtime 与相机专用 glibc 2.35，然后编译和安装。依赖安装到机器人固定目录 `~/.local/share/g1-deploy/aarch64/`，下载缓存保存在 `~/.cache/g1-deploy/robot-arm64/downloads/`；删除整个项目、重新拉取源码后仍可复用，无需保留项目里的 `.deps/`。仅禁止调用 apt 时加 `--no-system-deps`；完全离线时使用 `--offline` 并预先准备依赖缓存。
 不执行文件同步，不替换系统 glibc，不启动控制程序。支持 `--verify-camera` 只读相机验证。
+安装依赖后，新终端中可直接运行 `./g1 monitor eth0`、`./g1 realsense` 或对应的 `python3 apps/.../*.py` 入口，无需 `source` Python 环境。仿真入口会自动查找 `--mujoco-root` 下的 `.venv/bin/python3` 或 `venv/bin/python3`；其它仿真环境可用 `G1_SIM_PYTHON=/path/to/python3` 指定。MuJoCo 依赖仍由外部仿真项目提供。
 详细用法、缺失系统包的处理和离线缓存说明见 [机器人一键配置](docs/ROBOT_SETUP.md)。
 
 ## 在G1开发计算机上编译

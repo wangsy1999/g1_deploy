@@ -1,4 +1,10 @@
 """Standalone G1 29DOF DDS subscriber and local read-only web monitor."""
+# Direct python3 invocation also discovers the installed environment.
+if __name__ == "__main__":
+    from pathlib import Path as _Path
+    import runpy as _runpy
+    _runpy.run_path(str(_Path(__file__).resolve().parents[1] / "python_runtime.py"))["ensure_runtime"](__file__)
+
 import argparse
 import math
 import json

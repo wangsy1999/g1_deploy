@@ -4,6 +4,12 @@ Both controllers use DDS on lo. Depth observations are enabled by default so
 Parkour can use the same environment; --no-depth selects DDS-only simulation.
 The physics engine, scene and dependencies remain in unitree_mujoco.
 """
+# Direct python3 invocation also discovers the installed environment.
+if __name__ == "__main__":
+    from pathlib import Path as _Path
+    import runpy as _runpy
+    _runpy.run_path(str(_Path(__file__).resolve().parents[1] / "python_runtime.py"))["ensure_runtime"](__file__, simulation=True)
+
 import argparse
 from contextlib import ExitStack
 import os

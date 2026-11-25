@@ -10,8 +10,9 @@ fi
 if [[ -d "$root_dir/.python-deps" ]]; then
     export PYTHONPATH="$root_dir/.python-deps${PYTHONPATH:+:$PYTHONPATH}"
 fi
+persistent_deps="${G1_DEPS_DIR:-$HOME/.local/share/g1-deploy/$(uname -m)}"
 python="${PYTHON_BIN:-python3}"
-for dependency_root in "$root_dir/.deps" "$root_dir/../.deps"; do
+for dependency_root in "$persistent_deps" "$root_dir/.deps" "$root_dir/../.deps"; do
     if [[ -z "${PYTHON_BIN:-}" && -x "$dependency_root/python/bin/python3" ]]; then
         python="$dependency_root/python/bin/python3"
         if [[ -x "$dependency_root/python/bin/python3-realsense" ]]; then

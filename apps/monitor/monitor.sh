@@ -17,8 +17,9 @@ interface="$1"
     exit 2
 }
 [[ -f "$root_dir/apps/monitor/joint_monitor.py" ]] || { echo "Missing apps/monitor/joint_monitor.py" >&2; exit 1; }
+persistent_deps="${G1_DEPS_DIR:-$HOME/.local/share/g1-deploy/$(uname -m)}"
 python="${PYTHON_BIN:-python3}"
-for candidate in "$root_dir/.deps/python/bin/python3" "$root_dir/../.deps/python/bin/python3"; do
+for candidate in "$persistent_deps/python/bin/python3" "$root_dir/.deps/python/bin/python3" "$root_dir/../.deps/python/bin/python3"; do
     if [[ -z "${PYTHON_BIN:-}" && -x "$candidate" ]]; then python="$candidate"; break; fi
 done
 if [[ -d "$root_dir/.python-deps" ]]; then
@@ -26,7 +27,7 @@ if [[ -d "$root_dir/.python-deps" ]]; then
 fi
 # Match the native SDK used by the controller, without changing the system config.
 dds_library_dir=/usr/local/lib
-for dependency_root in "$root_dir/.deps" "$root_dir/../.deps"; do
+for dependency_root in "$persistent_deps" "$root_dir/.deps" "$root_dir/../.deps"; do
     if [[ -f "$dependency_root/cyclonedds/lib/libddsc.so" ]]; then
         dds_library_dir="$dependency_root/cyclonedds/lib"
         break
