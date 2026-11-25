@@ -15,7 +15,7 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;fl
 .detail{padding:18px}.detail h2{font-size:15px;word-break:break-all;margin:0 0 8px}label{color:#a3b4cd}canvas{width:100%;height:150px;display:block;margin:8px 0 18px;background:#0b1422;border-radius:8px}.joint-check{width:16px;height:16px;min-width:0;padding:0;flex:none;accent-color:#63ddcc;cursor:pointer}.joint-legend{display:flex;flex-wrap:wrap;gap:8px 14px;margin-bottom:14px;font-size:12px;word-break:break-all}.legend{font-size:12px;color:#91a0b5;margin:10px 0 18px}.measured{color:#63ddcc}.target{color:#fbbf75}.empty{padding:40px;text-align:center;color:#91a0b5}footer{margin-top:18px;color:#77879d;font-size:12px;line-height:1.8}
 .imu-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:20px}.imu-card{padding:16px}.imu-card h2{font-size:14px;color:#a3b4cd;margin:0 0 12px}.imu-vector{display:flex;gap:16px;flex-wrap:wrap}.imu-vector span{color:#91a0b5}.imu-vector b{display:block;margin-top:4px;color:#dce5f1;font-size:17px;font-variant-numeric:tabular-nums}@media(max-width:1000px){.imu-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:500px){.imu-grid{grid-template-columns:1fr}}
 @media(max-width:1000px){.layout{grid-template-columns:1fr}.scroll{max-height:55vh}body{padding:16px}.stats{gap:20px;flex-wrap:wrap}}:focus-visible{outline:2px solid #63ddcc;outline-offset:2px}
-.torso-grid{grid-template-columns:repeat(5,minmax(0,1fr))}@media(max-width:1200px){.torso-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:500px){.torso-grid{grid-template-columns:1fr}}</style>
+.torso-grid{grid-template-columns:repeat(5,minmax(0,1fr))}@media(max-width:1200px){.torso-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:500px){.torso-grid{grid-template-columns:1fr}}.depth-panel{margin:20px 0;padding:18px}.depth-panel h2{font-size:18px;margin:0 0 12px}.depth-options{display:flex;flex-wrap:wrap;gap:12px 20px;align-items:center;margin:12px 0}.depth-options label{display:flex;gap:7px;align-items:center}.depth-options input[type=checkbox]{flex:none;width:16px;height:16px;min-width:0;accent-color:#63ddcc}.depth-params{display:flex;gap:12px;flex-wrap:wrap;padding:12px 0}.depth-params label{display:flex;gap:6px;align-items:center;font-size:12px}.depth-params input{width:76px;min-width:0;flex:none;padding:6px}.depth-image{max-width:640px;margin:12px auto;text-align:center}.depth-image canvas{width:100%;height:auto;image-rendering:pixelated;margin-bottom:8px;touch-action:none}.depth-image.stale canvas{opacity:.4}.depth-panel summary{cursor:pointer;color:#a3b4cd}.depth-caption{font-size:12px;min-height:1.7em;color:#91a0b5}.depth-panel p{font-size:12px}.depth-panel .status{font-size:13px;margin-left:8px}</style>
 </head>
 <body>
 <header><div><h1>G1 <span style="color:#63ddcc">/</span> 关节实时监控</h1><p>查看关节状态、跟踪误差与最近 20 秒的变化</p></div><div id="status" class="status" role="status">正在连接…</div></header>
@@ -24,6 +24,18 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;fl
 <p>记录全部关节和两路 IMU，每个采样帧一行，持续写入机器人磁盘；刷新或关闭网页不会停止记录。暂停显示、搜索和绘图选择不影响记录。角度固定 rad，速度 rad/s，力矩 Nm，温度 °C，加速度 m/s²。停止后可选择文件下载。<br><span id="csvDirectory"></span></p>
 </section>
 <div class="stats"><span>控制端 Enable<b id="enable">—</b></span><span>关节数量<b id="count">—</b></span><span>监控时间 / s<b id="time">—</b></span><span>最大跟踪误差<b id="error">—</b></span><span>数据年龄 / ms<b id="age">—</b></span></div>
+<section class="panel depth-panel" aria-label="Policy 深度预览">
+<h2>Policy 相机 · 深度预览 <span id="depthStatus" class="status" role="status">等待画面</span></h2>
+<p>复用控制器采集的深度帧。以下设置仅影响网页预览，不修改 policy 输入或相机配置。</p>
+<div class="depth-options"><label><input type="checkbox" id="depthCrop" checked>裁剪</label><label><input type="checkbox" id="depthInpaint" checked>填洞</label><label><input type="checkbox" id="depthFilter">高斯滤波</label><label><input type="checkbox" id="depthNormalize" checked>归一化</label><select id="depthColor" aria-label="深度图配色"><option value="gray">灰度</option><option value="color">伪彩色</option></select><button id="depthReset">恢复预览默认值</button></div>
+<details><summary>处理参数</summary><div class="depth-params">
+<label>裁剪上<input id="depthTop" type="number" min="0" max="35" step="1" value="18"></label><label>下<input id="depthBottom" type="number" min="0" max="35" step="1" value="0"></label><label>左<input id="depthLeft" type="number" min="0" max="63" step="1" value="16"></label><label>右<input id="depthRight" type="number" min="0" max="63" step="1" value="16"></label>
+<label>填洞阈值 / m<input id="depthThreshold" type="number" min="0" max="100" step="0.05" value="0.2"></label><label>填洞半径<input id="depthRadius" type="number" min="0.1" max="10" step="0.1" value="3"></label>
+<label>滤波核（奇数）<input id="depthKernel" type="number" min="1" max="15" step="2" value="3"></label><label>σ<input id="depthSigma" type="number" min="0.01" max="10" step="0.1" value="1"></label>
+<label>深度下限 / m<input id="depthMinimum" type="number" min="0" max="100" step="0.1" value="0"></label><label>上限 / m<input id="depthMaximum" type="number" min="0.01" max="100" step="0.1" value="2.5"></label></div></details>
+<div id="depthPicture" class="depth-image stale"><canvas id="depthCanvas" width="64" height="36" aria-label="控制器深度图"></canvas><div id="depthInfo" class="depth-caption">等待 Parkour / Hybrid 控制器发布画面</div><div id="depthPixel" class="depth-caption">指向图像可查看深度值</div></div>
+<p>处理顺序：64×36 原始深度 → 可选裁剪 → 可选填洞 → 可选滤波 → 可选归一化。色阶按深度上下限映射，归一化开启时数值为 0～1，关闭时为米。</p>
+</section>
 <h2 style="font-size:18px">Torso IMU · 躯干 <span id="torso-status" class="status">等待数据</span></h2><p style="margin-bottom:14px">来源 rt/secondary_imu · Parkour 使用此 IMU · 超过 100 ms 标记过期</p><section class="imu-grid torso-grid" aria-label="Torso IMU 实时读数">
 <div class="panel imu-card"><h2 id="torso-rpy-label">姿态 RPY / rad</h2><div class="imu-vector"><span>Roll<b id="torso-rpy-0">—</b></span><span>Pitch<b id="torso-rpy-1">—</b></span><span>Yaw<b id="torso-rpy-2">—</b></span></div></div>
 <div class="panel imu-card"><h2 id="torso-gyroscope-label">角速度 / rad/s</h2><div class="imu-vector"><span>X<b id="torso-gyroscope-0">—</b></span><span>Y<b id="torso-gyroscope-1">—</b></span><span>Z<b id="torso-gyroscope-2">—</b></span></div></div>
@@ -153,6 +165,73 @@ function plot(id,key,target){
   for(const p of points){if(!Number.isFinite(p[field])){started=false;continue;}if(!started){ctx.moveTo(x(p.t),y(p[field]*f));started=true;}else ctx.lineTo(x(p.t),y(p[field]*f));}ctx.stroke();}
  for(const s of series){line(s.points,key,s.color,[]);if(target)line(s.points,target,s.color,[5,4]);}
 }
+// Camera preview is one-way telemetry. These GET options never reach the controller.
+const depthToggles={crop:'depthCrop',inpaint:'depthInpaint',filter:'depthFilter',normalize:'depthNormalize'};
+const depthNumbers={top:'depthTop',bottom:'depthBottom',left:'depthLeft',right:'depthRight',threshold:'depthThreshold',radius:'depthRadius',kernel:'depthKernel',sigma:'depthSigma',minimum:'depthMinimum',maximum:'depthMaximum'};
+let depthDefaults=null,depthFrame=null,depthRevision=0,depthRequest=null,depthTimer=null,depthStopped=false;
+function depthQuery(){
+ const query=new URLSearchParams();
+ for(const [key,id] of Object.entries(depthToggles))query.set(key,$(id).checked?'1':'0');
+ for(const [key,id] of Object.entries(depthNumbers))query.set(key,$(id).value);
+ return query.toString();
+}
+function drawDepth(frame){
+ const canvas=$('depthCanvas');canvas.width=frame.width;canvas.height=frame.height;
+ const context=canvas.getContext('2d'),image=context.createImageData(frame.width,frame.height);
+ const low=frame.units==='normalized'?0:frame.options.minimum,high=frame.units==='normalized'?1:frame.options.maximum;
+ const color=$('depthColor').value==='color';
+ for(let i=0;i<frame.image.length;i++){
+  const value=Math.max(0,Math.min(1,(frame.image[i]-low)/(high-low))),offset=i*4;
+  if(color){
+   const channel=shift=>Math.round(255*Math.max(0,Math.min(1,1.5-Math.abs(4*value-shift))));
+   image.data[offset]=channel(3);image.data[offset+1]=channel(2);image.data[offset+2]=channel(1);
+  }else{image.data[offset]=image.data[offset+1]=image.data[offset+2]=Math.round(value*255);}
+  image.data[offset+3]=255;
+ }
+ context.putImageData(image,0,0);
+}
+async function refreshDepth(){
+ if(depthStopped)return;
+ const revision=depthRevision,controller=new AbortController();depthRequest=controller;
+ const timeout=setTimeout(()=>controller.abort(),2000);
+ try{
+  const response=await fetch('/api/depth?'+depthQuery(),{cache:'no-store',signal:controller.signal});
+  const frame=await response.json();
+  if(revision!==depthRevision)return;
+  if(!response.ok||frame.error)throw new Error(frame.error||'无法读取画面');
+  $('depthStatus').textContent=!frame.available?'等待画面':frame.fresh?'在线':'画面已过期';
+  $('depthStatus').className='status '+(frame.fresh?'live':'bad');
+  $('depthPicture').className='depth-image'+(frame.fresh?'':' stale');
+  if(frame.image){
+   depthFrame=frame;drawDepth(frame);
+   const unit=frame.units==='normalized'?'归一化':'m';
+   $('depthInfo').textContent=frame.width+'×'+frame.height+' · '+(frame.source==='simulation'?'仿真':'RealSense')+' · 帧 '+frame.sequence+' · '+Math.min(...frame.image).toFixed(3)+'～'+Math.max(...frame.image).toFixed(3)+' '+unit;
+  }else{$('depthInfo').textContent='等待 Parkour / Hybrid 控制器发布画面';}
+ }catch(error){
+  if(revision===depthRevision){$('depthStatus').textContent=error.name==='AbortError'?'预览连接超时':'预览不可用';$('depthStatus').className='status bad';$('depthInfo').textContent=error.name==='AbortError'?'正在重试…':error.message;$('depthPicture').className='depth-image stale';}
+ }finally{clearTimeout(timeout);depthRequest=null;if(!depthStopped)depthTimer=setTimeout(refreshDepth,100);}
+}
+function depthSettingsChanged(){depthRevision++;if(depthRequest)depthRequest.abort();$('depthPixel').textContent='指向图像可查看深度值';}
+for(const id of [...Object.values(depthToggles),...Object.values(depthNumbers)])$(id).onchange=depthSettingsChanged;
+$('depthColor').onchange=()=>{if(depthFrame)drawDepth(depthFrame);};
+function applyDepthDefaults(){
+ if(!depthDefaults)return;
+ for(const [key,id] of Object.entries(depthToggles))$(id).checked=depthDefaults[key];
+ for(const [key,id] of Object.entries(depthNumbers))$(id).value=depthDefaults[key];
+ depthSettingsChanged();
+}
+$('depthReset').onclick=applyDepthDefaults;
+$('depthCanvas').onmousemove=event=>{
+ if(!depthFrame)return;
+ const box=$('depthCanvas').getBoundingClientRect(),x=Math.floor((event.clientX-box.left)*depthFrame.width/box.width),y=Math.floor((event.clientY-box.top)*depthFrame.height/box.height);
+ if(x<0||y<0||x>=depthFrame.width||y>=depthFrame.height)return;
+ $('depthPixel').textContent='像素 ('+x+', '+y+')：'+depthFrame.image[y*depthFrame.width+x].toFixed(4)+(depthFrame.units==='normalized'?'（归一化）':' m');
+};
+(async()=>{
+ try{const response=await fetch('/api/depth/config',{cache:'no-store'});if(response.ok){depthDefaults=(await response.json()).defaults;applyDepthDefaults();}}
+ catch(error){$('depthInfo').textContent='正在连接预览服务…';}
+ refreshDepth();
+})();
 // Recording lives on the robot; browser reconnections only refresh its status.
 let csvState=null,csvBusy=false;
 function renderCsvState(state){
@@ -226,7 +305,8 @@ stream.onmessage=event=>{
 stream.onerror=()=>status('连接中断 · 自动重试','bad');
 function draw(){if(dirty){dirty=false;render();}else if(latest&&!paused){renderTorsoImu();}requestAnimationFrame(draw);}
 requestAnimationFrame(draw);
-window.addEventListener('pagehide',()=>{stream.close();clearInterval(csvPoll);});
+window.addEventListener('pagehide',()=>{stream.close();clearInterval(csvPoll);depthStopped=true;clearTimeout(depthTimer);if(depthRequest)depthRequest.abort();});
+window.addEventListener('pageshow',event=>{if(event.persisted)window.location.reload();});
 $('search').oninput=render;$('unit').onchange=render;
 $('pause').onclick=()=>{paused=!paused;$('pause').textContent=paused?'继续显示':'暂停显示';if(!paused)clearHistory();};
 window.addEventListener('resize',()=>{dirty=true;});

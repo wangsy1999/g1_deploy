@@ -14,11 +14,14 @@ import threading
 import time
 from urllib.parse import parse_qs, urlsplit
 import shutil
+import os
 
 if __package__:
     from .csv_recorder import CsvRecorder
+    from .depth_preview import DepthPreview
 else:
     from csv_recorder import CsvRecorder
+    from depth_preview import DepthPreview
 
 
 JOINT_NAMES = (
@@ -73,7 +76,7 @@ def read_motor_temperature(motor):
 
 
 class JointMonitor:
-    def __init__(self, host="127.0.0.1", port=8765, rate_hz=50, record_dir=None):
+    def __init__(self, host="127.0.0.1", port=8765, rate_hz=50, record_dir=None, preview_port=9871):
         if not math.isfinite(rate_hz) or rate_hz <= 0:
             raise ValueError("Joint monitor rate must be positive")
         self.period = 1.0 / rate_hz
@@ -98,11 +101,22 @@ class JointMonitor:
         self.next_capture = self.started_at
         self.html = (Path(__file__).parent / "static" / "joint_monitor.html").read_bytes()
         self.recorder = CsvRecorder(record_dir or Path.home() / "logs", self.names)
+        self.depth_preview = DepthPreview(preview_port, Path(__file__).resolve().parents[1] /
+                                          "parkour/config/realsense_parkour.json")
         monitor = self
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
                 path = urlsplit(self.path).path
+                if path == "/api/depth/config":
+                    self.json_response(monitor.depth_preview.config())
+                    return
+                if path == "/api/depth":
+                    try:
+                        self.json_response(monitor.depth_preview.process(parse_qs(urlsplit(self.path).query)))
+                    except ValueError as error:
+                        self.json_response({"error": str(error)}, 400)
+                    return
                 if path == "/api/recordings":
                     self.json_response(monitor.recorder.status())
                     return
@@ -221,6 +235,7 @@ class JointMonitor:
                                        name="joint-monitor", daemon=True)
 
     def start(self):
+        self.depth_preview.start()
         self.thread.start()
         host, port = self.server.server_address[:2]
         print(f"Joint monitor: http://{host}:{port}", flush=True)
@@ -351,6 +366,7 @@ class JointMonitor:
             self.dry_target_at = time.monotonic()
 
     def close(self):
+        self.depth_preview.close()
         self.stopping.set()
         with self.changed:
             self.changed.notify_all()
@@ -371,13 +387,17 @@ def main():
                         help="DDS sampling limit in Hz (default: 50)")
     parser.add_argument("--record-dir", type=Path,
                         help="CSV directory (default: ~/logs)")
+    parser.add_argument("--preview-port", type=int, default=os.environ.get("G1_DEPTH_PREVIEW_PORT", "9871"),
+                        help="Loopback UDP depth preview port (default: 9871; 0 disables)")
     args = parser.parse_args()
     if args.domain < 0 or not 1 <= args.port <= 65535 or not math.isfinite(args.rate) or args.rate <= 0:
         parser.error("domain must be nonnegative; rate must be positive; port must be 1..65535")
+    if not 0 <= args.preview_port <= 65535:
+        parser.error("preview-port must be 0..65535")
     from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelSubscriber
     from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_, LowCmd_, IMUState_
 
-    monitor = JointMonitor(args.host, args.port, args.rate, args.record_dir)
+    monitor = JointMonitor(args.host, args.port, args.rate, args.record_dir, args.preview_port)
     subscribers = []
     try:
         ChannelFactoryInitialize(args.domain, args.interface)

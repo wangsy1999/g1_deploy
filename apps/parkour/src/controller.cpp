@@ -11,6 +11,7 @@
 #include "g1_motion_service.h"
 #include "g1_control_targets.h"
 #include "g1_parkour_input.h"
+#include "g1_depth_preview.h"
 #include "g1_policy_worker.h"
 #include "g1_hardware.h"
 #include "g1_motor_channel.h"
@@ -18,6 +19,7 @@
 #include "g1_unitree_remote.h"
 #include <unitree/robot/channel/channel_factory.hpp>
 #include <chrono>
+#include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <thread>
@@ -82,14 +84,20 @@ public:
         try {
             while (!g1_control::StopRequested()) {
                 const auto now = Clock::now();
-                if (!ReadObservation(now)) {
+                const bool ready = ReadObservation(now);
+                const char key = ReadInput();
+                if (key == ' ') break;
+                if (!ready) {
                     std::this_thread::sleep_for(g1_control::kControlPeriod);
                     continue;
                 }
-                const char key = ReadInput();
-                if (key == ' ') break;
                 HandleInput(key, now);
-                UpdatePolicy(key);
+                try { UpdatePolicy(key); }
+                catch (const g1_inference::PolicyTimeout& error) {
+                    if (hardware) throw;
+                    RefreshSimulationHistory(now, error.what());
+                    continue;
+                }
                 PublishTargets(now);
                 telemetry.PublishEnable(powered);
                 cycle.Sleep();
@@ -113,7 +121,11 @@ private:
         if(!joystick.empty()) gamepad=std::make_unique<g1_gamepad::Device>(joystick,false,false);
         input=hardware?&remote.state:gamepad?&gamepad->state:nullptr;
         if(hardware) camera=std::make_unique<g1_camera::RealSenseCamera>();
-        else simulation=std::make_unique<g1_parkour::SharedInput>("observation", 32 + 2369 * sizeof(float));
+        else {
+            const char* directory = std::getenv("G1_SIM_SHM_DIR");
+            simulation=std::make_unique<g1_parkour::SharedInput>("observation", 32 + 2369 * sizeof(float),
+                                                              directory ? directory : "/dev/shm");
+        }
         unitree::robot::ChannelFactory::Instance()->Init(domain,interface);
         states.Start();
         if(hardware) {
@@ -150,6 +162,7 @@ private:
         if(hardware) {
             if (const auto sample = camera->Latest()) {
                 depth = sample->frame;
+                depth_preview.Offer(depth.raw_depth, nullptr, depth.sequence, depth.captured_at);
                 last_time = depth.captured_at;
                 have_obs = true;
                 obs_at = sample->received_at;
@@ -157,12 +170,16 @@ private:
         } else {
             simulation->Latest([&](const unsigned char* packet,std::size_t size) {
                 auto value=g1_parkour::Decode(packet,size,policy.CameraPolicy().signature);
-                if(have_obs && (value.sequence <= obs.sequence || value.time <= last_time))
-                    throw std::runtime_error("Simulation stream restarted or replayed; restart controller");
-                if(running && have_obs && value.time-last_time>.05)
-                    throw std::runtime_error("Observation frames dropped; history timing invalid");
+                if(have_obs && value.sequence == obs.sequence && value.time == last_time) return;
+                const char* refresh = nullptr;
+                if(have_obs && (value.sequence < obs.sequence || value.time < last_time))
+                    refresh = "MuJoCo reset / simulation clock restarted";
+                else if(running && have_obs && value.time-last_time>.05)
+                    refresh = "Simulation observation gap";
+                depth_preview.Offer(nullptr, &value.depth, value.sequence, value.time);
                 static_cast<g1_parkour::Observation&>(obs)=value;last_time=value.time;
                 have_obs=true;obs_at=now;
+                if (refresh) RefreshSimulationHistory(now, refresh);
             });
         }
         bool ready=state_fresh && have_obs && now-obs_at<std::chrono::milliseconds(150);
@@ -179,6 +196,14 @@ private:
                 " lowstate_age_ms="+std::to_string(state_age_ms)+
                 " torso_imu_age_ms="+std::to_string(torso_age_ms);
         };
+        if(!hardware && !ready) {
+            simulation_waiting = true;
+            return false;
+        }
+        if(!hardware && simulation_waiting) {
+            RefreshSimulationHistory(now, "Simulation observations resumed");
+            simulation_waiting = false;
+        }
         if(!ready && (active||powered)) throw std::runtime_error("Camera observations or DDS state stale; stopping;"+stale_detail());
         if(!ready && now-waiting>g1_control::kStartupTimeout) throw std::runtime_error("No fresh camera/LowState/torso IMU;"+stale_detail());
         if(!ready) return false;
@@ -196,6 +221,16 @@ private:
         obs.lowstate = snapshot;
         if(powered && snapshot.mode_machine()!=command.mode_machine()) throw std::runtime_error("Robot mode changed");
         return true;
+    }
+
+    void RefreshSimulationHistory(Clock::time_point now, const char* reason) {
+        // Preserve strategy/output state. Begin invalidates in-flight work and
+        // resets model history on the worker before processing the new epoch.
+        if (running) policy_worker->Begin(powered);
+        const auto& camera_policy = policy.CameraPolicy();
+        target = g1_joints::ToMotorOrder(obs.q, camera_policy.ids, camera_policy.sign);
+        if (active && !running) { start = target; reset_at = now; holding = false; }
+        log.Line() << reason << "; histories refreshed, strategy/output state preserved.\n";
     }
 
     char ReadInput() {
@@ -360,10 +395,12 @@ private:
     std::unique_ptr<g1_control::MotorPublisher> publisher;
     std::unique_ptr<g1_control::Keyboard> keyboard;
     g1_control::AsyncLog log;
+    g1_camera::DepthPreviewPublisher depth_preview;
     State snapshot{};
     Imu imu{};
     Cmd command{};
     bool powered=false, active=false, holding=false, running=false, publishing=false, have_obs=false;
+    bool simulation_waiting = false;
     ControlObservation obs;
     g1_parkour::DepthFrame depth;
     g1_parkour::Joints start{}, target{}, neutral{}, motor_kp{}, motor_kd{};

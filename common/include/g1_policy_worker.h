@@ -14,6 +14,10 @@
 #include <utility>
 
 namespace g1_inference {
+class PolicyTimeout : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
 // 控制线程提交最新快照，工作线程独占策略历史并执行推理。
 // 邮箱只保留最新输入和结果；重置、预处理和模型推理期间不持有邮箱锁。
 // Observation 需要提供 sequence 字段，供同步仿真模式识别重复帧。
@@ -118,7 +122,7 @@ private:
             try {
                 const auto inference_started_at = Clock::now();
                 if (inference_started_at - input_at >= target_timeout_) {
-                    throw std::runtime_error("Policy input snapshot stale");
+                    throw PolicyTimeout("Policy input snapshot stale");
                 }
                 auto target = step_(observation, velocity);
                 const auto completed_at = Clock::now();
@@ -219,7 +223,7 @@ public:
             timed_out = now - started_at_ >= target_timeout_;
         }
         if (timed_out) {
-            throw std::runtime_error("Policy target stale (three-period watchdog)");
+            throw PolicyTimeout("Policy target stale (three-period watchdog)");
         }
         return result_;
     }

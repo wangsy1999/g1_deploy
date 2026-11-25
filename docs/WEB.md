@@ -55,6 +55,45 @@ cd install
 Python 依赖不打进 CMake 安装包；源码和安装目录都会自动使用机器人固定目录中的 Python 环境。目标机器首次使用先运行配置脚本安装依赖。
 网页静态文件按Python源码位置加载，目录整体移动后仍能使用。
 
+## Policy 相机深度预览
+
+监控页新增「Policy 相机 · 深度预览」。Parkour 和 Hybrid 控制器复用已有相机/仿真深度数据，后台以最高 10 FPS 向本机 monitor 发送预览副本。monitor 不打开 RealSense；独立的 `./g1 realsense` 服务仍需在实机控制器退出后使用。
+
+更新后需重新编译控制器，再重启 monitor 并刷新网页。实机运行已有的 Parkour/Hybrid 入口即可发布预览；只要控制器正在接收相机数据，尚未启动策略时也有画面。
+
+仿真验证使用三个终端（均在项目根目录，不需激活 Python 环境）：
+
+```bash
+# 终端一：外部 MuJoCo 项目仍需安装其仿真依赖
+python3 apps/simulation/sim.py --mujoco-root /path/to/unitree_mujoco --domain 1
+# 终端二：使用重新编译后的 Parkour 或 Hybrid 控制器
+./g1 parkour sim
+# 终端三：监控与仿真使用相同 DDS 域和网卡
+python3 apps/monitor/joint_monitor.py --domain 1 --interface lo --host 127.0.0.1 --port 8765
+```
+
+浏览器打开 `http://127.0.0.1:8765/`。页面可分别开关「裁剪」「填洞」「高斯滤波」「归一化」，展开「处理参数」可修改四边裁剪量、填洞阈值/半径、滤波核/σ、深度上下限。「恢复预览默认值」读取项目 `apps/parkour/config/realsense_parkour.json` 的参数；缺省为裁剪上/下/左/右 18/0/16/16、填洞阈值 0.2 m、半径 3、滤波关闭、归一化深度范围 0～2.5 m。默认输出 32×18，关闭裁剪显示 64×36。
+
+处理顺序为缩小到 64×36 → 可选裁剪 → 可选 `INPAINT_NS` 填洞 → 可选高斯滤波 → 可选裁剪深度范围并归一化。选择灰度或伪彩色显示，指向像素可查看数值。关闭归一化时数值为米，开启时为 0～1；配色始终按设置的深度范围映射。这里只处理预览副本，网页操作不会修改模型配置、相机采集或 policy 输入，也不用于修改策略的历史帧与延迟。
+
+为了允许关闭裁剪并重做处理，传输的是**未裁剪的 64×36 米制 float32 深度图**，不是归一化后的 32×18 图；数据约 9 KB/帧。实际相机 480×270 的最近邻缩小、序列化和 UDP 发送在独立线程完成；控制循环只以 `try_lock` 提交最新帧引用，锁忙则丢弃预览。接收端只缓存最新帧，过期 1 秒显示过期，未收到数据时显示等待。UDP 失败、monitor 退出或端口占用均不停止 policy。
+
+UDP 默认仅走 `127.0.0.1:9871`。更换端口时，在控制器和 monitor 两个终端使用相同环境变量，例如：
+
+```bash
+G1_DEPTH_PREVIEW_PORT=9872 ./g1 parkour sim
+G1_DEPTH_PREVIEW_PORT=9872 python3 apps/monitor/joint_monitor.py --domain 1 --interface lo
+```
+
+`G1_DEPTH_PREVIEW_PORT=0` 可关闭控制器的预览发送，monitor 也支持 `--preview-port 0` 关闭接收。多个 monitor 同时运行时应分配不同端口。浏览器仍只连接 monitor 的 HTTP 端口。预览处理依赖 NumPy 和 OpenCV，机器人配置脚本已安装；其它环境可安装 `apps/monitor/requirements.txt`。
+
+```bash
+# 无需相机/DDS，验证 UDP 协议、C++ 发送端和全部 16 种处理组合
+python3 -m unittest discover -s tests -p 'test_*.py' -v
+```
+
+上述深度处理测试需要 NumPy、OpenCV，C++ 发送端测试需要 g++；HTTP/UDP 测试只使用本机回环地址。
+
 ## CSV 数据记录
 
 网页顶部点击「开始新记录」，数据会持续写入机器人磁盘。点击「停止记录」会排空写入队列并同步文件，之后选择记录文件并点击「下载 CSV」。已有文件在监控程序重启后仍可列出和下载，不自动删除。
@@ -76,6 +115,8 @@ python3 -m unittest discover -s tests -p test_monitor_recording.py -v
 - `/`：网页。
 - `/api/joints`：当前29关节、IMU、数据年龄、输出和空跑状态。
 - `/api/stream`：SSE实时数据流。
+- `GET /api/depth/config`：预览默认参数与 UDP 端口。
+- `GET /api/depth?crop=1&inpaint=1&filter=0&normalize=1`：按当前网页选项处理最新深度副本。
 - `GET /api/recordings`：记录状态和文件列表。
 - `POST /api/recordings/start`、`POST /api/recordings/stop`：开始/停止记录（同源 JSON 请求）。
 - `GET /api/recordings/download?name=文件名`：下载已停止写入的 CSV。
