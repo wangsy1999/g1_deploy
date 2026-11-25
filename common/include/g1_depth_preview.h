@@ -115,7 +115,7 @@ public:
         pending_.sequence = sequence;
         pending_.captured_at = captured_at;
         have_pending_ = true;
-        next_offer_ = now + std::chrono::milliseconds(100);
+        next_offer_ = now + std::chrono::microseconds(16000);
         lock.unlock();
         changed_.notify_one();
     }

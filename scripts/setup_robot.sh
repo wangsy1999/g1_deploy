@@ -56,7 +56,7 @@ require_cache() {
     cache_verified=1
 }
 if ((install_system_deps)); then
-    required=(python3 curl git ca-certificates build-essential cmake libboost-dev libyaml-cpp-dev libopencv-dev libusb-1.0-0-dev libssl-dev pkg-config)
+    required=(python3 ffmpeg curl git ca-certificates build-essential cmake libboost-dev libyaml-cpp-dev libopencv-dev libusb-1.0-0-dev libssl-dev pkg-config)
     missing=()
     for package in "${required[@]}"; do
         if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q 'install ok installed'; then missing+=("$package"); fi

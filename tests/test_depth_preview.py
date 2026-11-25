@@ -151,8 +151,16 @@ class CppPublisherTests(unittest.TestCase):
         cls.addClassCleanup(cls.temp.cleanup)
         source = Path(cls.temp.name)/'sender.cpp'
         source.write_text('''#include "g1_depth_preview.h"
-int main() {
+int main(int argc, char**) {
     g1_camera::DepthPreviewPublisher preview;
+    if (argc > 1) {
+        std::array<float,64*36> image{};image.fill(1.f);
+        for (int i=0;i<50;++i) {
+            preview.Offer(nullptr,&image,i,i*.02);
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        return 0;
+    }
     auto raw = std::make_shared<std::vector<float>>(480*270);
     for (int i=0; i<480*270; ++i) (*raw)[i] = i*.001f;
     preview.Offer(raw, nullptr, 7, 1.25);
@@ -165,6 +173,23 @@ int main() {
         cls.binary = Path(cls.temp.name)/'sender'
         subprocess.run(['g++','-std=c++17','-Wall','-Wextra','-Werror','-pthread',
                         '-I',str(Path(__file__).resolve().parents[1]/'common/include'),str(source),'-o',str(cls.binary)],check=True)
+
+    def test_source_can_supply_more_than_30_fps(self):
+        import os
+        with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as receiver:
+            receiver.bind(('127.0.0.1',0));receiver.settimeout(.2)
+            env=dict(os.environ,G1_DEPTH_PREVIEW_PORT=str(receiver.getsockname()[1]))
+            sender=subprocess.Popen([str(self.binary),'rate'],env=env)
+            sequences=set()
+            try:
+                while sender.poll() is None:
+                    try:sequences.add(decode_packet(receiver.recv(65536))['sequence'])
+                    except socket.timeout:pass
+                while True:
+                    try:sequences.add(decode_packet(receiver.recv(65536))['sequence'])
+                    except socket.timeout:break
+            finally:sender.wait(timeout=5)
+            self.assertGreaterEqual(len(sequences),35)
 
     def test_real_and_simulated_packets_decode_in_python(self):
         import os

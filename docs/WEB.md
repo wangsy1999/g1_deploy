@@ -57,7 +57,7 @@ Python 依赖不打进 CMake 安装包；源码和安装目录都会自动使用
 
 ## Policy 相机深度预览
 
-监控页新增「Policy 相机 · 深度预览」。Parkour 和 Hybrid 控制器复用已有相机/仿真深度数据，后台以最高 10 FPS 向本机 monitor 发送预览副本。monitor 不打开 RealSense；独立的 `./g1 realsense` 服务仍需在实机控制器退出后使用。
+监控页新增「Policy 相机 · 深度预览」。Parkour 和 Hybrid 控制器复用已有相机/仿真深度数据，后台以最高约 60 FPS（受实际相机/仿真帧率限制）向本机 monitor 发送预览副本。monitor 不打开 RealSense；独立的 `./g1 realsense` 服务仍需在实机控制器退出后使用。
 
 更新后需重新编译控制器，再重启 monitor 并刷新网页。实机运行已有的 Parkour/Hybrid 入口即可发布预览；只要控制器正在接收相机数据，尚未启动策略时也有画面。
 
@@ -94,6 +94,40 @@ python3 -m unittest discover -s tests -p 'test_*.py' -v
 
 上述深度处理测试需要 NumPy、OpenCV，C++ 发送端测试需要 g++；HTTP/UDP 测试只使用本机回环地址。
 
+## 深度数值录制（压缩、无损）
+
+深度预览下方点击「开始深度录制」，默认 5 FPS，可选择 5/10/15/20/25/30 FPS。选 5 FPS 最省空间；开启裁剪默认只存 32×18。发送链路已提高帧率以支持 30 FPS 录制，不额外打开相机。源帧率不足时只保存新帧，页面显示实际录制 FPS，不通过重复帧凑数。开始时固定当前裁剪、填洞、滤波、归一化和所有数值参数；之后改变网页预览不会改动正在录制的数据。停止后选择文件下载。关闭/刷新网页仍持续录制，退出 monitor 时保存并结束。
+
+「同时保存 MP4」默认开启，会同步生成同名 H.264 `.mp4`，按开始时的灰度/伪彩色保存；可关闭它以节省空间。视频使用原生小分辨率、单线程编码、CRF 32 压缩，无音轨；尺寸为奇数时仅在视频边缘补齐为偶数，数值数据尺寸不变。停止后分别点击「下载深度数据」「下载视频」。视频和数值文件保存相同的新帧，视频以所选恒定 FPS 播放；若源帧丢失或暂停，真实采集时序以数值文件的时间戳为准。MP4 需正常停止完成封装；异常退出可能使视频无法播放，数值文件仍可尝试尾部恢复。
+
+视频依赖支持 `libx264` 的 FFmpeg；机器人依赖安装脚本已加入 `ffmpeg`。未安装编码器时页面会提示，关闭视频仍可录制无损深度。视频是有损可视化，不代替数值文件用于深度分析。
+
+文件位于 monitor 的记录目录（默认 `~/logs/`），后缀 `.g1depth`。保存的是**当前处理结果的 float32 数值**，逐位无损，采用帧间 XOR 差分、字节重排和 zlib 压缩，不存配色/放大后的画面，也不把像素展开成 CSV。参数和图像尺寸只在文件头保存一次，每帧保存发送端会话、序号、原采集时间、接收 UTC 时间、来源和校验值。归一化开启时单位为 0～1；如需米制深度，开始录制前关闭归一化。已执行的裁剪/填洞/滤波与深度裁限无法从记录结果撤销。
+
+32×18、5 FPS 的纯 float32 像素在压缩前约 675 KiB/分钟，压缩后取决于场景和运动。降低录制帧率可进一步减小体积。写盘独立于 UDP 接收线程，每秒同步磁盘；过期/重复帧不反复保存，恢复接收后自动继续。开始前至少需 100 MB 可用空间，低于 10 MB 或写入失败时停止并报告错误。
+
+无需激活 Python 环境即可检查文件；导出 `.npz` 时需要已安装 NumPy：
+
+```bash
+python3 apps/monitor/depth_recording.py ~/logs/g1-depth-实际文件名.g1depth
+python3 apps/monitor/depth_recording.py ~/logs/g1-depth-实际文件名.g1depth --export /tmp/depth.npz
+```
+
+`.npz` 包含 `depth`（帧数×高度×宽度）、`captured_at`、`received_at_unix`、`session`、`sequence`、`source` 和 JSON 字符串 `metadata`。大文件也可流式读取，避免一次载入全部帧：
+
+```python
+import numpy as np
+from apps.monitor.depth_recording import read_recording
+
+records = read_recording('recording.g1depth')
+metadata = next(records)
+for frame in records:
+    depth = np.frombuffer(frame['data'], dtype='<f4').reshape(metadata['height'], metadata['width'])
+    # depth 是此帧的精确 float32 数值，单位见 metadata['units']
+```
+
+异常断电可能损失最后尚未同步的数据；文件尾部不完整时可加 `--recover` 读取所有完整帧。`.npz` 导出会将所有帧载入内存，长记录建议使用上述流式接口。
+
 ## CSV 数据记录
 
 网页顶部点击「开始新记录」，数据会持续写入机器人磁盘。点击「停止记录」会排空写入队列并同步文件，之后选择记录文件并点击「下载 CSV」。已有文件在监控程序重启后仍可列出和下载，不自动删除。
@@ -115,6 +149,9 @@ python3 -m unittest discover -s tests -p test_monitor_recording.py -v
 - `/`：网页。
 - `/api/joints`：当前29关节、IMU、数据年龄、输出和空跑状态。
 - `/api/stream`：SSE实时数据流。
+- `GET /api/depth-recordings`：深度数值录制状态及文件列表。
+- `POST /api/depth-recordings/start`、`POST /api/depth-recordings/stop`：开始/停止深度数值录制。
+- `GET /api/depth-recordings/download?name=文件名`：下载压缩深度数据。
 - `GET /api/depth/config`：预览默认参数与 UDP 端口。
 - `GET /api/depth?crop=1&inpaint=1&filter=0&normalize=1`：按当前网页选项处理最新深度副本。
 - `GET /api/recordings`：记录状态和文件列表。

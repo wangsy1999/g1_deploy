@@ -15,7 +15,7 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;fl
 .detail{padding:18px}.detail h2{font-size:15px;word-break:break-all;margin:0 0 8px}label{color:#a3b4cd}canvas{width:100%;height:150px;display:block;margin:8px 0 18px;background:#0b1422;border-radius:8px}.joint-check{width:16px;height:16px;min-width:0;padding:0;flex:none;accent-color:#63ddcc;cursor:pointer}.joint-legend{display:flex;flex-wrap:wrap;gap:8px 14px;margin-bottom:14px;font-size:12px;word-break:break-all}.legend{font-size:12px;color:#91a0b5;margin:10px 0 18px}.measured{color:#63ddcc}.target{color:#fbbf75}.empty{padding:40px;text-align:center;color:#91a0b5}footer{margin-top:18px;color:#77879d;font-size:12px;line-height:1.8}
 .imu-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:20px}.imu-card{padding:16px}.imu-card h2{font-size:14px;color:#a3b4cd;margin:0 0 12px}.imu-vector{display:flex;gap:16px;flex-wrap:wrap}.imu-vector span{color:#91a0b5}.imu-vector b{display:block;margin-top:4px;color:#dce5f1;font-size:17px;font-variant-numeric:tabular-nums}@media(max-width:1000px){.imu-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:500px){.imu-grid{grid-template-columns:1fr}}
 @media(max-width:1000px){.layout{grid-template-columns:1fr}.scroll{max-height:55vh}body{padding:16px}.stats{gap:20px;flex-wrap:wrap}}:focus-visible{outline:2px solid #63ddcc;outline-offset:2px}
-.torso-grid{grid-template-columns:repeat(5,minmax(0,1fr))}@media(max-width:1200px){.torso-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:500px){.torso-grid{grid-template-columns:1fr}}.depth-panel{margin:20px 0;padding:18px}.depth-panel h2{font-size:18px;margin:0 0 12px}.depth-options{display:flex;flex-wrap:wrap;gap:12px 20px;align-items:center;margin:12px 0}.depth-options label{display:flex;gap:7px;align-items:center}.depth-options input[type=checkbox]{flex:none;width:16px;height:16px;min-width:0;accent-color:#63ddcc}.depth-params{display:flex;gap:12px;flex-wrap:wrap;padding:12px 0}.depth-params label{display:flex;gap:6px;align-items:center;font-size:12px}.depth-params input{width:76px;min-width:0;flex:none;padding:6px}.depth-image{max-width:640px;margin:12px auto;text-align:center}.depth-image canvas{width:100%;height:auto;image-rendering:pixelated;margin-bottom:8px;touch-action:none}.depth-image.stale canvas{opacity:.4}.depth-panel summary{cursor:pointer;color:#a3b4cd}.depth-caption{font-size:12px;min-height:1.7em;color:#91a0b5}.depth-panel p{font-size:12px}.depth-panel .status{font-size:13px;margin-left:8px}</style>
+.torso-grid{grid-template-columns:repeat(5,minmax(0,1fr))}@media(max-width:1200px){.torso-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:500px){.torso-grid{grid-template-columns:1fr}}.depth-panel{margin:20px 0;padding:18px}.depth-panel h2{font-size:18px;margin:0 0 12px}.depth-options{display:flex;flex-wrap:wrap;gap:12px 20px;align-items:center;margin:12px 0}.depth-options select{max-width:100%;min-width:0}.depth-options label{display:flex;gap:7px;align-items:center}.depth-options input[type=checkbox]{flex:none;width:16px;height:16px;min-width:0;accent-color:#63ddcc}.depth-params{display:flex;gap:12px;flex-wrap:wrap;padding:12px 0}.depth-params label{display:flex;gap:6px;align-items:center;font-size:12px}.depth-params input{width:76px;min-width:0;flex:none;padding:6px}.depth-image{max-width:640px;margin:12px auto;text-align:center}.depth-image canvas{width:100%;height:auto;image-rendering:pixelated;margin-bottom:8px;touch-action:none}.depth-image.stale canvas{opacity:.4}.depth-panel summary{cursor:pointer;color:#a3b4cd}.depth-caption{font-size:12px;min-height:1.7em;color:#91a0b5}.depth-panel p{font-size:12px}.depth-panel .status{font-size:13px;margin-left:8px}</style>
 </head>
 <body>
 <header><div><h1>G1 <span style="color:#63ddcc">/</span> 关节实时监控</h1><p>查看关节状态、跟踪误差与最近 20 秒的变化</p></div><div id="status" class="status" role="status">正在连接…</div></header>
@@ -28,6 +28,8 @@ header{display:flex;justify-content:space-between;align-items:center;gap:20px;fl
 <h2>Policy 相机 · 深度预览 <span id="depthStatus" class="status" role="status">等待画面</span></h2>
 <p>复用控制器采集的深度帧。以下设置仅影响网页预览，不修改 policy 输入或相机配置。</p>
 <div class="depth-options"><label><input type="checkbox" id="depthCrop" checked>裁剪</label><label><input type="checkbox" id="depthInpaint" checked>填洞</label><label><input type="checkbox" id="depthFilter">高斯滤波</label><label><input type="checkbox" id="depthNormalize" checked>归一化</label><select id="depthColor" aria-label="深度图配色"><option value="gray">灰度</option><option value="color">伪彩色</option></select><button id="depthReset">恢复预览默认值</button></div>
+<div class="depth-options" aria-label="深度数值录制"><select id="depthRecordFps" aria-label="深度录制帧率"><option value="5" selected>5 FPS · 最省空间</option><option value="10">10 FPS</option><option value="15">15 FPS</option><option value="20">20 FPS</option><option value="25">25 FPS</option><option value="30">30 FPS</option></select><label><input id="depthRecordVideo" type="checkbox" checked>同时保存 MP4</label><button id="depthRecordStart" disabled>开始深度录制</button><button id="depthRecordDownload" disabled>下载深度数据</button><button id="depthVideoDownload" disabled>下载视频</button><select id="depthRecordFiles" aria-label="选择深度记录文件"><option value="">暂无深度记录</option></select><span id="depthRecordStatus" role="status">正在获取录制状态…</span></div>
+<p>无损保存 float32 深度数值，支持 5～30 FPS，默认 5 FPS；可同时保存当前配色的 H.264 MP4。源帧率不足时仅录制收到的新帧，视频按所选帧率播放，真实时间以数值记录的时间戳为准。录制参数在开始时固定，后续调整预览不会改变当前记录；关闭网页仍继续保存到磁盘。</p>
 <details><summary>处理参数</summary><div class="depth-params">
 <label>裁剪上<input id="depthTop" type="number" min="0" max="35" step="1" value="18"></label><label>下<input id="depthBottom" type="number" min="0" max="35" step="1" value="0"></label><label>左<input id="depthLeft" type="number" min="0" max="63" step="1" value="16"></label><label>右<input id="depthRight" type="number" min="0" max="63" step="1" value="16"></label>
 <label>填洞阈值 / m<input id="depthThreshold" type="number" min="0" max="100" step="0.05" value="0.2"></label><label>填洞半径<input id="depthRadius" type="number" min="0.1" max="10" step="0.1" value="3"></label>
@@ -209,7 +211,7 @@ async function refreshDepth(){
   }else{$('depthInfo').textContent='等待 Parkour / Hybrid 控制器发布画面';}
  }catch(error){
   if(revision===depthRevision){$('depthStatus').textContent=error.name==='AbortError'?'预览连接超时':'预览不可用';$('depthStatus').className='status bad';$('depthInfo').textContent=error.name==='AbortError'?'正在重试…':error.message;$('depthPicture').className='depth-image stale';}
- }finally{clearTimeout(timeout);depthRequest=null;if(!depthStopped)depthTimer=setTimeout(refreshDepth,100);}
+ }finally{clearTimeout(timeout);depthRequest=null;if(!depthStopped)depthTimer=setTimeout(refreshDepth,33);}
 }
 function depthSettingsChanged(){depthRevision++;if(depthRequest)depthRequest.abort();$('depthPixel').textContent='指向图像可查看深度值';}
 for(const id of [...Object.values(depthToggles),...Object.values(depthNumbers)])$(id).onchange=depthSettingsChanged;
@@ -232,6 +234,44 @@ $('depthCanvas').onmousemove=event=>{
  catch(error){$('depthInfo').textContent='正在连接预览服务…';}
  refreshDepth();
 })();
+// Depth values are recorded by the backend, independently of browser lifetime.
+let depthRecordState=null,depthRecordBusy=false;
+function renderDepthRecording(state){
+ depthRecordState=state;
+ $('depthRecordStart').textContent=state.recording?'停止深度录制':state.saving?'正在保存…':'开始深度录制';
+ $('depthRecordStart').disabled=depthRecordBusy||(!state.recording&&state.saving);
+ $('depthRecordFps').disabled=state.recording||state.saving;
+ $('depthRecordVideo').disabled=state.recording||state.saving;
+ if((state.recording||state.saving)&&state.metadata){$('depthRecordFps').value=state.metadata.fps;$('depthRecordVideo').checked=Boolean(state.metadata.video);}
+ $('depthRecordStatus').textContent=state.error||((state.recording?'正在录制':'已停止')+' · '+state.frames+' 帧'+(state.metadata?' · '+state.metadata.width+'×'+state.metadata.height+' · '+state.metadata.fps+' FPS · 实录 '+(state.sampled_fps||0).toFixed(1)+' FPS':''));
+ const choice=$('depthRecordFiles').value;$('depthRecordFiles').replaceChildren();
+ if(!state.files.length){const option=document.createElement('option');option.value='';option.textContent='暂无深度记录';$('depthRecordFiles').appendChild(option);}
+ for(const file of state.files){const option=document.createElement('option');option.value=file.name;option.textContent=file.name+' · '+(file.bytes/1024).toFixed(1)+' KB';$('depthRecordFiles').appendChild(option);}
+ if(state.files.some(file=>file.name===choice))$('depthRecordFiles').value=choice;
+ updateDepthDownload();
+}
+function updateDepthDownload(){
+ const name=$('depthRecordFiles').value,blocked=!name||!depthRecordState||(name===depthRecordState.filename&&depthRecordState.saving);
+ $('depthRecordDownload').disabled=blocked;
+ $('depthVideoDownload').disabled=blocked||!depthRecordState.files.find(file=>file.name===name)?.video;
+}
+async function depthRecordRequest(path,body){
+ const response=await fetch(path,{cache:'no-store',...(body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{})});
+ const state=await response.json();if(!response.ok)throw new Error(state.error||'深度录制请求失败');return state;
+}
+async function refreshDepthRecording(){if(depthRecordBusy)return;try{renderDepthRecording(await depthRecordRequest('/api/depth-recordings'));}catch(error){$('depthRecordStatus').textContent=error.message;$('depthRecordStart').disabled=true;}}
+$('depthRecordStart').onclick=async()=>{
+ if(depthRecordBusy||!depthRecordState)return;
+ const starting=!depthRecordState.recording;depthRecordBusy=true;$('depthRecordStart').disabled=true;
+ try{
+  const state=await depthRecordRequest('/api/depth-recordings/'+(starting?'start':'stop'),starting?{options:Object.fromEntries(new URLSearchParams(depthQuery())),fps:Number($('depthRecordFps').value),video:$('depthRecordVideo').checked,color:$('depthColor').value}:{});
+  renderDepthRecording(state);if(starting){$('depthRecordFiles').value=state.filename;updateDepthDownload();}
+ }catch(error){$('depthRecordStatus').textContent=error.message;}finally{depthRecordBusy=false;$('depthRecordStart').disabled=!depthRecordState||(!depthRecordState.recording&&depthRecordState.saving);}
+};
+$('depthRecordFiles').onchange=updateDepthDownload;
+$('depthRecordDownload').onclick=()=>{if($('depthRecordDownload').disabled)return;const link=document.createElement('a');link.href='/api/depth-recordings/download?name='+encodeURIComponent($('depthRecordFiles').value);link.download=$('depthRecordFiles').value;document.body.appendChild(link);link.click();link.remove();};
+$('depthVideoDownload').onclick=()=>{if($('depthVideoDownload').disabled)return;const file=depthRecordState.files.find(file=>file.name===$('depthRecordFiles').value);const link=document.createElement('a');link.href='/api/depth-recordings/download?name='+encodeURIComponent(file.video);link.download=file.video;document.body.appendChild(link);link.click();link.remove();};
+refreshDepthRecording();const depthRecordPoll=setInterval(refreshDepthRecording,1000);
 // Recording lives on the robot; browser reconnections only refresh its status.
 let csvState=null,csvBusy=false;
 function renderCsvState(state){
@@ -305,7 +345,7 @@ stream.onmessage=event=>{
 stream.onerror=()=>status('连接中断 · 自动重试','bad');
 function draw(){if(dirty){dirty=false;render();}else if(latest&&!paused){renderTorsoImu();}requestAnimationFrame(draw);}
 requestAnimationFrame(draw);
-window.addEventListener('pagehide',()=>{stream.close();clearInterval(csvPoll);depthStopped=true;clearTimeout(depthTimer);if(depthRequest)depthRequest.abort();});
+window.addEventListener('pagehide',()=>{stream.close();clearInterval(csvPoll);clearInterval(depthRecordPoll);depthStopped=true;clearTimeout(depthTimer);if(depthRequest)depthRequest.abort();});
 window.addEventListener('pageshow',event=>{if(event.persisted)window.location.reload();});
 $('search').oninput=render;$('unit').onchange=render;
 $('pause').onclick=()=>{paused=!paused;$('pause').textContent=paused?'继续显示':'暂停显示';if(!paused)clearHistory();};

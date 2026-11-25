@@ -19,9 +19,11 @@ import os
 if __package__:
     from .csv_recorder import CsvRecorder
     from .depth_preview import DepthPreview
+    from .depth_recording import DepthRecorder
 else:
     from csv_recorder import CsvRecorder
     from depth_preview import DepthPreview
+    from depth_recording import DepthRecorder
 
 
 JOINT_NAMES = (
@@ -103,11 +105,18 @@ class JointMonitor:
         self.recorder = CsvRecorder(record_dir or Path.home() / "logs", self.names)
         self.depth_preview = DepthPreview(preview_port, Path(__file__).resolve().parents[1] /
                                           "parkour/config/realsense_parkour.json")
+        self.depth_recorder = DepthRecorder(self.depth_preview, self.recorder.directory)
         monitor = self
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
                 path = urlsplit(self.path).path
+                if path == "/api/depth-recordings":
+                    self.json_response(monitor.depth_recorder.status())
+                    return
+                if path == "/api/depth-recordings/download":
+                    self.download_csv()
+                    return
                 if path == "/api/depth/config":
                     self.json_response(monitor.depth_preview.config())
                     return
@@ -160,7 +169,7 @@ class JointMonitor:
 
             def do_POST(self):
                 path = urlsplit(self.path).path
-                if path not in ("/api/recordings/start", "/api/recordings/stop"):
+                if path not in ("/api/recordings/start", "/api/recordings/stop", "/api/depth-recordings/start", "/api/depth-recordings/stop"):
                     self.send_error(404)
                     return
                 origin = self.headers.get("Origin")
@@ -172,12 +181,18 @@ class JointMonitor:
                     length = int(self.headers.get("Content-Length", "0"))
                     if not 0 <= length <= 1024:
                         raise ValueError("请求过大")
-                    json.loads(self.rfile.read(length) or b'{}')
+                    body = json.loads(self.rfile.read(length) or b'{}')
+                    if not isinstance(body, dict):
+                        raise ValueError('请求必须为 JSON 对象')
+                    recorder = monitor.depth_recorder if path.startswith('/api/depth-recordings/') else monitor.recorder
                     if path.endswith("/start"):
-                        monitor.recorder.start()
+                        if recorder is monitor.depth_recorder:
+                            recorder.start(body.get('options', {}), body.get('fps', 5), body.get('video', False), body.get('color', 'gray'))
+                        else:
+                            recorder.start()
                     else:
-                        monitor.recorder.stop()
-                    self.json_response(monitor.recorder.status())
+                        recorder.stop()
+                    self.json_response(recorder.status())
                 except ValueError as error:
                     self.json_response({"error": str(error)}, 409)
                 except OSError as error:
@@ -186,10 +201,12 @@ class JointMonitor:
             def download_csv(self):
                 name = parse_qs(urlsplit(self.path).query).get("name", [None])[0]
                 try:
-                    path = monitor.recorder.download_path(name)
+                    depth = urlsplit(self.path).path.startswith('/api/depth-recordings/')
+                    recorder = monitor.depth_recorder if depth else monitor.recorder
+                    path = recorder.download_path(name)
                     with path.open('rb') as handle:
                         self.send_response(200)
-                        self.send_header("Content-Type", "text/csv; charset=utf-8")
+                        self.send_header("Content-Type", (("video/mp4" if path.suffix == ".mp4" else "application/octet-stream") if depth else "text/csv; charset=utf-8"))
                         self.send_header("Content-Disposition", f'attachment; filename="{path.name}"')
                         self.send_header("Content-Length", str(path.stat().st_size))
                         self.send_header("Cache-Control", "no-store")
@@ -366,6 +383,7 @@ class JointMonitor:
             self.dry_target_at = time.monotonic()
 
     def close(self):
+        self.depth_recorder.stop()
         self.depth_preview.close()
         self.stopping.set()
         with self.changed:
