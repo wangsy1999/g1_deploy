@@ -23,6 +23,8 @@ Usage: bash scripts/setup_robot.sh [options]
 Missing dependencies are downloaded automatically; --offline requires installed
 dependencies or an offline cache. Dependencies persist outside the checkout in
 ~/.local/share/g1-deploy/aarch64 (override with G1_DEPS_DIR).
+GitHub dependencies use mirrors with automatic fallback (override with G1_GITHUB_MIRROR).
+Online pip installs use Tsinghua PyPI by default (override with G1_PIP_INDEX_URL or PIP_INDEX_URL).
 Copy the project yourself before running. No SSH, SCP, rsync,
 robot motion, time changes, system glibc replacement, or auto-start is performed.
 HELP
@@ -128,6 +130,11 @@ if [[ ! -e "$deps/python/lib/libpython3.10.so.1.0" ]]; then
 fi
 cp "$root/apps/realsense/python3-realsense.sh" "$deps/python/bin/python3-realsense"
 chmod +x "$deps/python/bin/python3-realsense"
+if ((offline)); then
+    pip_source=(--no-index --find-links="$cache")
+else
+    pip_source=(--index-url "${G1_PIP_INDEX_URL:-${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}}")
+fi
 python_packages=('pip==25.0.1' 'setuptools==75.9.1' 'wheel==0.48.0'
     'numpy==1.26.4' 'rich-click==1.9.9' 'opencv-python-headless==4.11.0.86' 'pyrealsense2==2.55.1.6486')
 if ! "$python" - "${python_packages[@]}" <<'PYTHON'
@@ -142,22 +149,16 @@ for requirement in sys.argv[1:]:
         sys.exit(1)
 PYTHON
 then
-    if ((offline)); then
-        require_cache
-        "$deps/python/bin/python3-realsense" -m pip install --no-index --find-links="$cache" "${python_packages[@]}"
-    else
-        # The camera wheel needs glibc 2.35 even when the robot runs Ubuntu 20.04.
-        "$deps/python/bin/python3-realsense" -m pip install "${python_packages[@]}"
-    fi
+    if ((offline)); then require_cache; fi
+    # The camera wheel needs glibc 2.35 even when the robot runs Ubuntu 20.04.
+    "$deps/python/bin/python3-realsense" -m pip install "${pip_source[@]}" "${python_packages[@]}"
 else
     echo 'Pinned Python packages already installed; skipping pip install.'
 fi
 if ! "$python" -c 'import importlib.metadata as m; assert m.version("cyclonedds")=="0.10.2"' 2>/dev/null; then
     cyclone_package='cyclonedds==0.10.2'
-    pip_source=()
     if ((offline)); then
         require_cache
-        pip_source=(--no-index --find-links="$cache")
         cyclone_package="$cache/cyclonedds-0.10.2.tar.gz"
     fi
     CFLAGS="-I$deps/runtime/python/include/python3.10 ${CFLAGS:-}" \

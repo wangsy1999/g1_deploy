@@ -14,7 +14,19 @@ bash scripts/setup_robot.sh
 
 默认检查并自动安装缺失的 Ubuntu 编译包；已安装的软件包跳过，只有缺包时才调用 sudo/apt，需要可用软件源、网络和管理员权限。系统依赖保存在系统中，SDK 和 Python 环境保存在机器人用户目录 `~/.local/share/g1-deploy/aarch64/`，独立于整个源码目录。删除项目后重新拉取源码，仍会自动复用；不需要保留项目里的 `.deps/`。
 
-默认联网下载缺失的依赖：Python 使用 python-build-standalone ARM64 发行包，ONNX Runtime 使用官方 ARM64 发行包，Unitree SDK 与 CycloneDDS 从官方 GitHub 仓库获取，Python 包通过 pip 获取。原生 RealSense SDK 在系统中找不到时，从官方 v2.55.1 源码编译到 `~/.local/share/g1-deploy/aarch64/realsense`，使用 RSUSB 后端，不打内核补丁。首次源码编译需要等待，`--jobs N` 可调整并行数。
+Python ARM64 发行包优先通过 `registry.npmmirror.com` 下载。若下载失败，脚本会依次尝试 `gh-proxy.org` 和 `ghproxy.net`。其他从 GitHub 获取的依赖默认也使用这两个代理。设置 `G1_GITHUB_MIRROR` 后，脚本会在指定的 HTTPS 镜像地址后拼接完整的 GitHub 下载链接。
+
+pip 联网安装默认使用 `https://pypi.tuna.tsinghua.edu.cn/simple`。已设置 `PIP_INDEX_URL` 时使用该地址，`G1_PIP_INDEX_URL` 的优先级更高。可在单次部署时切换到中科大镜像。
+
+```bash
+G1_PIP_INDEX_URL=https://mirrors.ustc.edu.cn/pypi/simple bash scripts/setup_robot.sh
+```
+
+ONNX Runtime 1.18.1 ARM64 C/C++ 归档使用 npmmirror，下载失败或校验不通过时尝试 `hf-mirror.com`。两个地址使用同一个固定的 SHA-256，在线下载缓存也会在解压前校验。
+
+私有 glibc 2.35 优先使用清华 Ubuntu Ports 镜像，失败时依次尝试中科大、阿里云和 Ubuntu 官方源。脚本从同一镜像读取 Jammy ARM64 索引和软件包，按索引中的 SHA-256 校验后解压到依赖目录。
+
+原生 RealSense SDK 在系统中找不到时，从官方 v2.55.1 源码编译到 `~/.local/share/g1-deploy/aarch64/realsense`，使用 RSUSB 后端，不打内核补丁。部署脚本会提前从 GitHub 镜像下载并校验 nlohmann/json 3.11.3 源码归档，RealSense 的 CMake 配置直接使用本地缓存。首次源码编译需要等待，`--jobs N` 可调整并行数。
 
 禁止脚本调用 apt（已手动安装系统依赖，项目依赖仍可联网下载）时：
 
@@ -89,7 +101,7 @@ CMake 会自动搜索固定依赖目录下的 Unitree SDK、RealSense 和 ONNX R
 
 ## 下载缓存、离线运行与迁移
 
-默认下载保存在 `~/.cache/g1-deploy/robot-arm64/downloads/`，源码及中间构建目录位于固定依赖目录中的 `sources/`、`build/`。固定版本为 Python 3.10.15、CycloneDDS 0.10.2、ONNX Runtime 1.18.1 和 RealSense 2.55.1；Unitree SDK 首次从官方 main（C++）/master（Python）分支下载，保留下载的归档以复用。下载失败立即停止，可修复网络后重跑，不启动控制器。
+默认下载保存在 `~/.cache/g1-deploy/robot-arm64/downloads/`，源码及中间构建目录位于固定依赖目录中的 `sources/`、`build/`。固定版本为 Python 3.10.15、CycloneDDS 0.10.2、ONNX Runtime 1.18.1 和 RealSense 2.55.1；Unitree SDK 首次从官方 main（C++）/master（Python）分支下载，保留下载的归档以复用。所有候选地址都下载失败时，脚本会停止。修复网络后可重新运行。
 
 完全离线运行（禁止自动下载和 apt）：
 

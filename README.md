@@ -19,6 +19,8 @@ bash scripts/setup_robot.sh
 ```
 
 缺少依赖时自动下载并安装，随后编译到 `build/`、安装到 `install/`，不启动控制程序。
+GitHub 依赖下载失败时会自动切换镜像，可用 `G1_GITHUB_MIRROR` 指定镜像站。
+pip 联网安装默认使用清华 PyPI 镜像，可用 `G1_PIP_INDEX_URL` 指定其他源。
 依赖保存在 `~/.local/share/g1-deploy/aarch64/`，下载缓存在 `~/.cache/g1-deploy/robot-arm64/`；删除整个项目后也能复用，无需保留项目 `.deps/`。
 
 ```bash
